@@ -1,0 +1,82 @@
+from __future__ import annotations
+
+from datetime import datetime
+from pathlib import Path
+from typing import Protocol, runtime_checkable
+
+from verdict.core.models import (
+    Direction,
+    KeyEvent,
+    Platform,
+    RecordingHandle,
+    Selector,
+    UiHierarchy,
+)
+
+
+@runtime_checkable
+class InputDriver(Protocol):
+    """Universal input primitives. Applies across mobile, desktop, and web —
+    selector semantics differ per platform, but the operations themselves
+    don't. See docs/adr/0007-layered-device-driver-protocols.md.
+    """
+
+    def tap(self, x: int, y: int) -> None: ...
+
+    def tap_selector(self, selector: Selector) -> None: ...
+
+    def swipe(self, x1: int, y1: int, x2: int, y2: int, duration_ms: int = 300) -> None: ...
+
+    def scroll(self, direction: Direction, selector: Selector | None = None) -> None: ...
+
+    def type_text(self, text: str) -> None: ...
+
+    def press_key(self, key: KeyEvent) -> None: ...
+
+    def screenshot(self) -> Path: ...
+
+    def dump_hierarchy(self) -> UiHierarchy: ...
+
+    def wait_for(self, selector: Selector, timeout_ms: int) -> bool: ...
+
+
+@runtime_checkable
+class AppLifecycleDriver(Protocol):
+    """Mobile-app lifecycle operations. Not implemented by non-app-based
+    platforms (e.g. a future Web driver would implement a different
+    lifecycle protocol — navigate/clear_cookies — instead of this one).
+    """
+
+    def install(self, path: str) -> None: ...
+
+    def uninstall(self, package: str) -> None: ...
+
+    def launch(self, package: str, activity: str | None = None) -> None: ...
+
+    def clear_data(self, package: str) -> None: ...
+
+
+@runtime_checkable
+class DiagnosticsDriver(Protocol):
+    """Log/recording/bugreport collection. Semantics adapt per platform
+    (logcat vs. browser console vs. OS event log); collect_bugreport is
+    optional since it has no cross-platform equivalent.
+    """
+
+    def collect_logs(self, since: datetime | None = None) -> Path: ...
+
+    def start_recording(self) -> RecordingHandle: ...
+
+    def stop_recording(self, handle: RecordingHandle) -> Path: ...
+
+    def collect_bugreport(self) -> Path | None: ...
+
+
+@runtime_checkable
+class DeviceDriver(InputDriver, AppLifecycleDriver, DiagnosticsDriver, Protocol):
+    """Composition of all three capability protocols. Android's
+    implementation satisfies this in full; other platforms may implement
+    only a subset of the constituent protocols (see ADR-0007).
+    """
+
+    platform: Platform
