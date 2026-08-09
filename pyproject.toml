@@ -1,0 +1,45 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "verdict"
+version = "0.1.0"
+description = "Agentic mobile testing platform"
+requires-python = ">=3.11"
+readme = "README.md"
+dependencies = [
+    "pydantic>=2.6",
+    "uiautomator2>=3.2",
+    "adbutils>=2.8",
+    "jinja2>=3.1",
+    "click>=8.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "ruff>=0.5",
+    "mypy>=1.10",
+]
+
+[project.scripts]
+verdict = "verdict.agent_interface.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/verdict"]
+
+[tool.pytest.ini_options]
+markers = [
+    "requires_device: test needs a real Android device/emulator attached via adb",
+]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
