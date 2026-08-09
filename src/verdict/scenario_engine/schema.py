@@ -25,6 +25,18 @@ _REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
 }
 
 
+def register_action(name: str, required_fields: tuple[str, ...] = ()) -> None:
+    """Extend the known step-action vocabulary. Lets a domain plugin bundle
+    (e.g. `domains/ime/actions.py`) add its own action names at import time
+    without `scenario_engine` depending on any domain package — the
+    dependency points the other way, as it must (domains sit above the
+    engine, see docs/architecture.md §6.2, §6.4).
+    """
+    if name in _REQUIRED_FIELDS:
+        raise ValueError(f"action '{name}' is already registered")
+    _REQUIRED_FIELDS[name] = required_fields
+
+
 class StepSpec(BaseModel):
     action: str
     selector: Selector | None = None

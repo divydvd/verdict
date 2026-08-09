@@ -95,6 +95,17 @@ _ACTIONS: dict[str, Callable[[DeviceDriver, StepSpec, RunContext], AssertionResu
 }
 
 
+def register_action_handler(
+    name: str, handler: Callable[[DeviceDriver, StepSpec, RunContext], AssertionResult | None]
+) -> None:
+    """Counterpart to `schema.register_action` — wires the runtime handler
+    for a domain-registered action name. See `domains/ime/actions.py`.
+    """
+    if name in _ACTIONS:
+        raise ValueError(f"action handler '{name}' is already registered")
+    _ACTIONS[name] = handler
+
+
 def _run_once(spec: ScenarioSpec, driver: DeviceDriver, ctx: RunContext, timeline: Timeline) -> bool:
     collector = EvidenceCollector(driver, ctx.evidence_dir)
     for index, step in enumerate(spec.steps):
