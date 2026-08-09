@@ -33,6 +33,7 @@ class FakeDeviceDriver:
     evidence_dir: Path = field(default_factory=lambda: Path(tempfile.mkdtemp(prefix="verdict-fake-")))
 
     _hierarchy: UiNode | None = field(default=None, init=False, repr=False)
+    _log_content: str = field(default="", init=False, repr=False)
     installed_packages: set[str] = field(default_factory=set, init=False)
     current_package: str | None = field(default=None, init=False)
     cleared_data: list[str] = field(default_factory=list, init=False)
@@ -50,6 +51,10 @@ class FakeDeviceDriver:
     def set_hierarchy(self, root: UiNode | None) -> None:
         """Test-setup hook: replace the current fake UI tree."""
         self._hierarchy = root
+
+    def set_logs(self, content: str) -> None:
+        """Test-setup hook: content returned by the next collect_logs() call."""
+        self._log_content = content
 
     def tap(self, x: int, y: int) -> None:
         self.tap_calls.append((x, y))
@@ -105,7 +110,7 @@ class FakeDeviceDriver:
     def collect_logs(self, since: datetime | None = None) -> Path:
         self.evidence_dir.mkdir(parents=True, exist_ok=True)
         path = self.evidence_dir / f"logs-{len(self.logs_collected)}.txt"
-        path.write_text("")
+        path.write_text(self._log_content)
         self.logs_collected.append(path)
         return path
 

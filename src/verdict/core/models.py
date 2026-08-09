@@ -158,3 +158,4 @@ class RunContext(BaseModel):
     driver: Any
     variables: dict[str, str] = Field(default_factory=dict)
     evidence_dir: Path
+    last_action_duration_ms: float | None = None

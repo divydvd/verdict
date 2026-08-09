@@ -88,6 +88,13 @@ def test_clear_data_records_package():
     assert driver.cleared_data == ["bha.keys.smartype"]
 
 
+def test_set_logs_controls_collect_logs_content():
+    driver = FakeDeviceDriver()
+    driver.set_logs("FATAL EXCEPTION: main\n")
+    logs = driver.collect_logs()
+    assert logs.read_text() == "FATAL EXCEPTION: main\n"
+
+
 def test_collect_logs_and_bugreport_write_files():
     driver = FakeDeviceDriver()
     logs = driver.collect_logs()

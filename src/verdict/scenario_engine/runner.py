@@ -103,6 +103,7 @@ def _run_once(spec: ScenarioSpec, driver: DeviceDriver, ctx: RunContext, timelin
         passed = True
         assertion_results: list[AssertionResult] = []
 
+        start = time.perf_counter()
         try:
             action_fn = _ACTIONS[step.action]
             result = action_fn(driver, step, ctx)
@@ -115,6 +116,8 @@ def _run_once(spec: ScenarioSpec, driver: DeviceDriver, ctx: RunContext, timelin
                 passed = result.passed
                 if not passed:
                     error = result.message
+        finally:
+            ctx.last_action_duration_ms = (time.perf_counter() - start) * 1000
 
         evidence_refs = collector.capture_all(spec.evidence.always, index)
         if not passed:
