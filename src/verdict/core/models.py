@@ -107,6 +107,33 @@ class RecordingHandle(BaseModel):
     started_at: datetime
 
 
+class EvidenceRef(BaseModel):
+    kind: str
+    path: Path
+
+
+class AssertionResult(BaseModel):
+    passed: bool
+    message: str = ""
+    evidence_refs: list[EvidenceRef] = Field(default_factory=list)
+
+
+class TimelineEvent(BaseModel):
+    timestamp: datetime
+    step_id: str
+    action: str
+    passed: bool
+    error: str | None = None
+    evidence_refs: list[EvidenceRef] = Field(default_factory=list)
+    assertion_results: list[AssertionResult] = Field(default_factory=list)
+
+
+class Timeline(BaseModel):
+    run_id: str
+    scenario_name: str
+    events: list[TimelineEvent] = Field(default_factory=list)
+
+
 class RunContext(BaseModel):
     """Per-session execution context threaded through a scenario run and
     passed to every Assertion.check(ctx).

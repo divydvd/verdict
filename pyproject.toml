@@ -14,6 +14,7 @@ dependencies = [
     "adbutils>=2.8",
     "jinja2>=3.1",
     "click>=8.1",
+    "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]
@@ -22,6 +23,7 @@ dev = [
     "pytest-cov>=5.0",
     "ruff>=0.5",
     "mypy>=1.10",
+    "types-PyYAML>=6.0",
 ]
 
 [project.scripts]

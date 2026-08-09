@@ -1,0 +1,198 @@
+from __future__ import annotations
+
+import time
+import uuid
+from collections.abc import Callable
+from datetime import UTC, datetime
+from pathlib import Path
+
+from pydantic import BaseModel
+
+from verdict.assertions.base import assertion_registry
+from verdict.core.exceptions import VerdictError
+from verdict.core.models import AssertionResult, EvidenceRef, RunContext, Timeline, TimelineEvent
+from verdict.device_driver.base import DeviceDriver
+from verdict.scenario_engine.schema import ScenarioSpec, StepSpec
+
+
+class ScenarioResult(BaseModel):
+    passed: bool
+    attempts: int
+    timeline: Timeline
+
+
+def _do_install(driver: DeviceDriver, step: StepSpec, ctx: RunContext) -> None:
+    assert step.path is not None
+    driver.install(step.path)
+
+
+def _do_uninstall(driver: DeviceDriver, step: StepSpec, ctx: RunContext) -> None:
+    assert step.package is not None
+    driver.uninstall(step.package)
+
+
+def _do_launch(driver: DeviceDriver, step: StepSpec, ctx: RunContext) -> None:
+    assert step.package is not None
+    driver.launch(step.package, step.activity)
+
+
+def _do_clear_data(driver: DeviceDriver, step: StepSpec, ctx: RunContext) -> None:
+    assert step.package is not None
+    driver.clear_data(step.package)
+
+
+def _do_tap(driver: DeviceDriver, step: StepSpec, ctx: RunContext) -> None:
+    assert step.selector is not None
+    driver.tap_selector(step.selector)
+
+
+def _do_type_text(driver: DeviceDriver, step: StepSpec, ctx: RunContext) -> None:
+    assert step.text is not None
+    driver.type_text(step.text)
+
+
+def _do_swipe(driver: DeviceDriver, step: StepSpec, ctx: RunContext) -> None:
+    assert step.x1 is not None and step.y1 is not None and step.x2 is not None and step.y2 is not None
+    driver.swipe(step.x1, step.y1, step.x2, step.y2, step.duration_ms)
+
+
+def _do_scroll(driver: DeviceDriver, step: StepSpec, ctx: RunContext) -> None:
+    assert step.direction is not None
+    driver.scroll(step.direction, step.selector)
+
+
+def _do_press_key(driver: DeviceDriver, step: StepSpec, ctx: RunContext) -> None:
+    assert step.key is not None
+    driver.press_key(step.key)
+
+
+def _do_wait_for(driver: DeviceDriver, step: StepSpec, ctx: RunContext) -> AssertionResult:
+    assert step.selector is not None
+    ok = driver.wait_for(step.selector, step.timeout_ms)
+    message = f"wait_for {step.selector!r} within {step.timeout_ms}ms"
+    return AssertionResult(passed=ok, message=message if ok else f"timed out: {message}")
+
+
+def _do_assert(driver: DeviceDriver, step: StepSpec, ctx: RunContext) -> AssertionResult:
+    assert step.assertion is not None
+    assertion = assertion_registry.get(step.assertion, **step.args)
+    return assertion.check(ctx)
+
+
+_ACTIONS: dict[str, Callable[[DeviceDriver, StepSpec, RunContext], AssertionResult | None]] = {
+    "install": _do_install,
+    "uninstall": _do_uninstall,
+    "launch": _do_launch,
+    "clear_data": _do_clear_data,
+    "tap": _do_tap,
+    "type_text": _do_type_text,
+    "swipe": _do_swipe,
+    "scroll": _do_scroll,
+    "press_key": _do_press_key,
+    "wait_for": _do_wait_for,
+    "assert": _do_assert,
+}
+
+
+def _capture_evidence(kind: str, driver: DeviceDriver, evidence_dir: Path, seq: int) -> EvidenceRef | None:
+    if kind == "screenshot":
+        return EvidenceRef(kind=kind, path=driver.screenshot())
+    if kind == "hierarchy":
+        hierarchy = driver.dump_hierarchy()
+        path = evidence_dir / f"hierarchy-{seq}.xml"
+        evidence_dir.mkdir(parents=True, exist_ok=True)
+        path.write_text(hierarchy.raw_xml)
+        return EvidenceRef(kind=kind, path=path)
+    if kind == "logcat":
+        return EvidenceRef(kind=kind, path=driver.collect_logs())
+    if kind == "bugreport":
+        bugreport_path = driver.collect_bugreport()
+        return EvidenceRef(kind=kind, path=bugreport_path) if bugreport_path is not None else None
+    raise VerdictError(f"Unknown evidence kind '{kind}'")
+
+
+def _run_once(spec: ScenarioSpec, driver: DeviceDriver, ctx: RunContext, timeline: Timeline) -> bool:
+    for index, step in enumerate(spec.steps):
+        step_id = f"{index}:{step.action}"
+        error: str | None = None
+        passed = True
+        assertion_results: list[AssertionResult] = []
+
+        try:
+            action_fn = _ACTIONS[step.action]
+            result = action_fn(driver, step, ctx)
+        except VerdictError as exc:
+            passed = False
+            error = str(exc)
+        else:
+            if result is not None:
+                assertion_results.append(result)
+                passed = result.passed
+                if not passed:
+                    error = result.message
+
+        evidence_refs = [
+            ref
+            for kind in spec.evidence.always
+            if (ref := _capture_evidence(kind, driver, ctx.evidence_dir, index)) is not None
+        ]
+        if not passed:
+            evidence_refs += [
+                ref
+                for kind in spec.evidence.on_failure
+                if (ref := _capture_evidence(kind, driver, ctx.evidence_dir, index)) is not None
+            ]
+
+        timeline.events.append(
+            TimelineEvent(
+                timestamp=datetime.now(UTC),
+                step_id=step_id,
+                action=step.action,
+                passed=passed,
+                error=error,
+                evidence_refs=evidence_refs,
+                assertion_results=assertion_results,
+            )
+        )
+
+        if not passed:
+            return False
+
+    return True
+
+
+def run_scenario(
+    spec: ScenarioSpec,
+    driver: DeviceDriver,
+    session_id: str,
+    run_id: str | None = None,
+    evidence_dir: Path | None = None,
+    sleep: Callable[[float], None] = time.sleep,
+) -> ScenarioResult:
+    """Execute a parsed scenario against `driver`, retrying the whole
+    scenario up to `spec.retries.max_attempts` times on failure.
+    """
+    resolved_run_id = run_id or str(uuid.uuid4())
+    resolved_evidence_dir = evidence_dir or Path(f"/tmp/verdict-evidence-{resolved_run_id}")
+
+    max_attempts = max(1, spec.retries.max_attempts)
+    timeline = Timeline(run_id=resolved_run_id, scenario_name=spec.name)
+    passed = False
+
+    for attempt in range(1, max_attempts + 1):
+        ctx = RunContext(
+            session_id=session_id,
+            run_id=resolved_run_id,
+            scenario_name=spec.name,
+            driver=driver,
+            variables=spec.variables,
+            evidence_dir=resolved_evidence_dir,
+        )
+        timeline = Timeline(run_id=resolved_run_id, scenario_name=spec.name)
+        passed = _run_once(spec, driver, ctx, timeline)
+        if passed:
+            return ScenarioResult(passed=True, attempts=attempt, timeline=timeline)
+        if attempt < max_attempts and spec.retries.backoff_ms:
+            sleep(spec.retries.backoff_ms / 1000)
+
+    return ScenarioResult(passed=False, attempts=max_attempts, timeline=timeline)
