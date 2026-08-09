@@ -10,8 +10,9 @@ from pydantic import BaseModel
 
 from verdict.assertions.base import assertion_registry
 from verdict.core.exceptions import VerdictError
-from verdict.core.models import AssertionResult, EvidenceRef, RunContext, Timeline, TimelineEvent
+from verdict.core.models import AssertionResult, RunContext, Timeline, TimelineEvent
 from verdict.device_driver.base import DeviceDriver
+from verdict.evidence.collector import EvidenceCollector
 from verdict.scenario_engine.schema import ScenarioSpec, StepSpec
 
 
@@ -94,24 +95,8 @@ _ACTIONS: dict[str, Callable[[DeviceDriver, StepSpec, RunContext], AssertionResu
 }
 
 
-def _capture_evidence(kind: str, driver: DeviceDriver, evidence_dir: Path, seq: int) -> EvidenceRef | None:
-    if kind == "screenshot":
-        return EvidenceRef(kind=kind, path=driver.screenshot())
-    if kind == "hierarchy":
-        hierarchy = driver.dump_hierarchy()
-        path = evidence_dir / f"hierarchy-{seq}.xml"
-        evidence_dir.mkdir(parents=True, exist_ok=True)
-        path.write_text(hierarchy.raw_xml)
-        return EvidenceRef(kind=kind, path=path)
-    if kind == "logcat":
-        return EvidenceRef(kind=kind, path=driver.collect_logs())
-    if kind == "bugreport":
-        bugreport_path = driver.collect_bugreport()
-        return EvidenceRef(kind=kind, path=bugreport_path) if bugreport_path is not None else None
-    raise VerdictError(f"Unknown evidence kind '{kind}'")
-
-
 def _run_once(spec: ScenarioSpec, driver: DeviceDriver, ctx: RunContext, timeline: Timeline) -> bool:
+    collector = EvidenceCollector(driver, ctx.evidence_dir)
     for index, step in enumerate(spec.steps):
         step_id = f"{index}:{step.action}"
         error: str | None = None
@@ -131,17 +116,9 @@ def _run_once(spec: ScenarioSpec, driver: DeviceDriver, ctx: RunContext, timelin
                 if not passed:
                     error = result.message
 
-        evidence_refs = [
-            ref
-            for kind in spec.evidence.always
-            if (ref := _capture_evidence(kind, driver, ctx.evidence_dir, index)) is not None
-        ]
+        evidence_refs = collector.capture_all(spec.evidence.always, index)
         if not passed:
-            evidence_refs += [
-                ref
-                for kind in spec.evidence.on_failure
-                if (ref := _capture_evidence(kind, driver, ctx.evidence_dir, index)) is not None
-            ]
+            evidence_refs += collector.capture_all(spec.evidence.on_failure, index)
 
         timeline.events.append(
             TimelineEvent(
