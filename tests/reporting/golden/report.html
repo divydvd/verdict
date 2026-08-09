@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Verdict report: typo_correction</title>
+<style>
+  body { font-family: sans-serif; margin: 2rem; }
+  .pass { color: #1a7f37; }
+  .fail { color: #cf222e; }
+  .step { border: 1px solid #d0d7de; border-radius: 6px; padding: 0.75rem 1rem; margin-bottom: 0.75rem; }
+  .evidence img, .evidence video { max-width: 320px; display: block; margin-top: 0.5rem; }
+</style>
+</head>
+<body>
+<h1>Scenario: typo_correction</h1>
+<p>
+  <strong>Result:</strong> <span class="fail">FAILED</span><br>
+  <strong>Attempts:</strong> 2<br>
+  <strong>Run ID:</strong> run-fixed-1
+</p>
+<h2>Steps</h2>
+
+<div class="step">
+  <h3 class="pass">[PASS] 0:tap — tap</h3>
+  
+  
+  
+  <div class="evidence">
+    
+      
+        <img src="/evidence/0-screenshot.png" alt="screenshot for 0:tap">
+      
+    
+  </div>
+  
+</div>
+
+<div class="step">
+  <h3 class="fail">[FAIL] 1:assert — assert</h3>
+  <p><strong>Error:</strong> autocorrect not applied</p>
+  
+  <ul>
+    
+    <li class="fail">[FAIL] autocorrect not applied</li>
+    
+  </ul>
+  
+  
+  <div class="evidence">
+    
+      
+        <p>hierarchy: <a href="/evidence/1-hierarchy.xml">/evidence/1-hierarchy.xml</a></p>
+      
+    
+  </div>
+  
+</div>
+
+</body>
+</html>

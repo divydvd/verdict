@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Verdict report: {{ timeline.scenario_name }}</title>
+<style>
+  body { font-family: sans-serif; margin: 2rem; }
+  .pass { color: #1a7f37; }
+  .fail { color: #cf222e; }
+  .step { border: 1px solid #d0d7de; border-radius: 6px; padding: 0.75rem 1rem; margin-bottom: 0.75rem; }
+  .evidence img, .evidence video { max-width: 320px; display: block; margin-top: 0.5rem; }
+</style>
+</head>
+<body>
+<h1>Scenario: {{ timeline.scenario_name }}</h1>
+<p>
+  <strong>Result:</strong> <span class="{{ 'pass' if result.passed else 'fail' }}">{{ 'PASSED' if result.passed else 'FAILED' }}</span><br>
+  <strong>Attempts:</strong> {{ result.attempts }}<br>
+  <strong>Run ID:</strong> {{ timeline.run_id }}
+</p>
+<h2>Steps</h2>
+{% for event in timeline.events %}
+<div class="step">
+  <h3 class="{{ 'pass' if event.passed else 'fail' }}">[{{ 'PASS' if event.passed else 'FAIL' }}] {{ event.step_id }} — {{ event.action }}</h3>
+  {% if event.error %}<p><strong>Error:</strong> {{ event.error }}</p>{% endif %}
+  {% if event.assertion_results %}
+  <ul>
+    {% for assertion_result in event.assertion_results %}
+    <li class="{{ 'pass' if assertion_result.passed else 'fail' }}">[{{ 'PASS' if assertion_result.passed else 'FAIL' }}] {{ assertion_result.message }}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+  {% if event.evidence_refs %}
+  <div class="evidence">
+    {% for ref in event.evidence_refs %}
+      {% if ref.kind == 'screenshot' %}
+        <img src="{{ ref.path }}" alt="{{ ref.kind }} for {{ event.step_id }}">
+      {% elif ref.kind == 'recording' %}
+        <video src="{{ ref.path }}" controls></video>
+      {% else %}
+        <p>{{ ref.kind }}: <a href="{{ ref.path }}">{{ ref.path }}</a></p>
+      {% endif %}
+    {% endfor %}
+  </div>
+  {% endif %}
+</div>
+{% endfor %}
+</body>
+</html>

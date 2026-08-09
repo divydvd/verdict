@@ -1,0 +1,44 @@
+{
+  "passed": false,
+  "attempts": 2,
+  "timeline": {
+    "run_id": "run-fixed-1",
+    "scenario_name": "typo_correction",
+    "events": [
+      {
+        "timestamp": "2026-01-01T00:00:00Z",
+        "step_id": "0:tap",
+        "action": "tap",
+        "passed": true,
+        "error": null,
+        "evidence_refs": [
+          {
+            "kind": "screenshot",
+            "path": "/evidence/0-screenshot.png"
+          }
+        ],
+        "assertion_results": []
+      },
+      {
+        "timestamp": "2026-01-01T00:00:01Z",
+        "step_id": "1:assert",
+        "action": "assert",
+        "passed": false,
+        "error": "autocorrect not applied",
+        "evidence_refs": [
+          {
+            "kind": "hierarchy",
+            "path": "/evidence/1-hierarchy.xml"
+          }
+        ],
+        "assertion_results": [
+          {
+            "passed": false,
+            "message": "autocorrect not applied",
+            "evidence_refs": []
+          }
+        ]
+      }
+    ]
+  }
+}
