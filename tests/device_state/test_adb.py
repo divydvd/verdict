@@ -7,13 +7,13 @@ from verdict.device_state.adb import AdbError, SubprocessAdb
 
 
 def test_tests_cannot_reach_the_real_adb():
-    with pytest.raises(AssertionError, match="real adb"):
+    with pytest.raises(AssertionError, match="adb without --run-device"):
         SubprocessAdb().devices()
 
 
 @pytest.fixture
 def recorded(monkeypatch):
-    # Undo the autouse guard for these tests only; subprocess.run is replaced too.
+    # Undo the autouse guard for these tests only; subprocess.run is replaced with a fake.
     calls = []
 
     def fake_run(argv, **kwargs):

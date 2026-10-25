@@ -73,14 +73,3 @@ def _block_real_device(
     except ImportError:
         return
     monkeypatch.setattr(uiautomator2, "connect", _no_connect)
-
-
-@pytest.fixture(autouse=True)
-def _no_real_adb(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Stop any test from running the real `adb` binary through `SubprocessAdb`."""
-    from verdict.device_state import adb as adb_module
-
-    def refuse(*args: Any, **kwargs: Any) -> Any:
-        raise AssertionError("a test tried to run the real adb; inject a fake instead")
-
-    monkeypatch.setattr(adb_module.SubprocessAdb, "_run", refuse)
