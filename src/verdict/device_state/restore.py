@@ -54,6 +54,7 @@ class Row:
 class RestoreReport:
     rows: list[Row] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
+    install_skipped: bool = False
 
     @property
     def equal(self) -> bool:
@@ -159,9 +160,22 @@ def put_apk_back(
     if now is not None and now.version_code > before.version_code:
         report.notes.append("the pretest APK has a lower version code: no downgrade, the tested build stays")
         return tested_build
+    if now is not None and _installed_apk_is_pretest(adb, baseline, folder):
+        report.install_skipped = True
+        report.notes.append("the installed APK has the pretest SHA-256: the install is skipped")
+        return set()
     adb.install(folder / PRETEST_APK)
     report.notes.append("the pretest APK is installed again")
     return set()
+
+
+def _installed_apk_is_pretest(adb: Adb, baseline: Baseline, folder: Path) -> bool:
+    if baseline.state.apk_sha256 is None:
+        return False
+    try:
+        return pull_apk(adb, baseline.package, folder / FINAL_APK) == baseline.state.apk_sha256
+    finally:
+        (folder / FINAL_APK).unlink(missing_ok=True)
 
 
 def read_app_data_if_needed(adb: Adb, baseline: Baseline) -> dict[str, str]:
@@ -239,6 +253,9 @@ def restore(adb: Adb, baseline: Baseline, folder: Path, result: TestResult) -> R
     set_keyboards(adb, state.keyboard)
     final = read_final_state(adb, baseline, folder, app_data)
     report.rows = compare(state, final, expected)
+    if report.install_skipped:
+        sha = (state.apk_sha256 or "-")[:12]
+        report.rows.append(Row("pretest APK install", sha, f"skipped: {sha} installed", "yes"))
     return report
 
 
