@@ -199,3 +199,47 @@ def test_keyboard_start_after_the_check_point_gives_no_false_difference(folder):
     read = max(i for i, c in enumerate(phone.commands) if "sha256sum" in c)
     last_set = max(i for i, c in enumerate(phone.commands) if c == f"ime set {TARGET_IME}")
     assert read < last_set
+
+
+def test_null_default_keyboard_is_deleted(folder):
+    phone = FakePhone()
+    del phone.secure["default_input_method"]
+    baseline = take_baseline(phone, TARGET, PLAY, folder)
+    assert baseline.state.keyboard["default_input_method"] == "null"
+    phone.run_candidate_test(100)
+    report = restore(phone, baseline, folder, "FAIL")
+    assert "default_input_method" not in phone.secure
+    assert "settings delete secure default_input_method" in phone.commands
+    row = rows(report)["default_input_method"]
+    assert (row.baseline, row.final, row.status) == ("null", "null", "yes")
+
+
+def test_keyboard_subtypes_are_put_back_exactly(folder):
+    phone = FakePhone()
+    recorded = f"{TARGET_IME};123;456:{GBOARD};789"
+    phone.secure["enabled_input_methods"] = recorded
+    phone.secure["selected_input_method_subtype"] = "123"
+    baseline = take_baseline(phone, TARGET, PLAY, folder)
+    phone.run_candidate_test(100)
+    phone.secure["selected_input_method_subtype"] = "-1"
+    report = restore(phone, baseline, folder, "FAIL")
+    assert phone.secure["enabled_input_methods"] == recorded
+    assert phone.secure["selected_input_method_subtype"] == "123"
+    assert rows(report)["enabled_input_methods"].status == "yes"
+
+
+def test_compare_shows_a_lost_subtype():
+    from verdict.device_state.baseline import DeviceState
+    from verdict.device_state.restore import compare
+
+    keyboard = {
+        "default_input_method": TARGET_IME,
+        "enabled_input_methods": f"{TARGET_IME};123:{GBOARD}",
+        "selected_input_method_subtype": "123",
+    }
+    before = DeviceState(packages={}, keyboard=keyboard, display={})
+    after = DeviceState(
+        packages={}, keyboard={**keyboard, "enabled_input_methods": f"{TARGET_IME}:{GBOARD}"}, display={}
+    )
+    row = next(r for r in compare(before, after, set()) if r.item == "enabled_input_methods")
+    assert row.status == "no"

@@ -198,10 +198,13 @@ def execute_restore(
 ) -> RestoreReport:
     baseline = load_baseline(folder, package)
     adb = (adb_factory or SubprocessAdb)(device)
-    preflight(adb, device, check_lock=False)
+    try:
+        preflight(adb, device, check_lock=False)
+    except (AdbError, OSError) as exc:
+        raise BlockedError(f"the preflight check failed: {exc}") from exc
     try:
         return restore(adb, baseline, folder, result)
-    except (AdbError, VerdictError) as exc:
+    except (AdbError, VerdictError, OSError) as exc:
         raise BlockedError(f"the restore stopped; finish it by hand from the skill: {exc}") from exc
 
 

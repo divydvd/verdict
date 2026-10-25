@@ -226,3 +226,20 @@ def test_restore_command_blocks_when_adb_fails(tmp_path, monkeypatch):
     )
     assert result.exit_code == 2
     assert "BLOCKED: the restore stopped" in result.output
+
+
+def test_restore_command_blocks_when_adb_fails_in_the_preflight(tmp_path, monkeypatch):
+    from verdict.device_state.adb import AdbError
+
+    phone, folder = _baseline_and_test(tmp_path)
+
+    def broken_devices():
+        raise AdbError("`adb devices` failed: no server")
+
+    phone.devices = broken_devices
+    monkeypatch.setattr(cli, "SubprocessAdb", lambda serial: phone)
+    result = CliRunner().invoke(
+        cli.main, ["restore", "bha.keys.smartype.debug", "--dir", str(folder), "--result", "FAIL"]
+    )
+    assert result.exit_code == 2, result.output
+    assert "BLOCKED: the preflight check failed" in result.output

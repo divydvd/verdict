@@ -125,7 +125,10 @@ def set_display(adb: Adb, display: dict[str, str]) -> None:
 
 
 def set_keyboards(adb: Adb, keyboard: dict[str, str]) -> None:
-    """Make the enabled keyboards, the default, and the subtype equal the baseline."""
+    """Make the enabled keyboards, the default, and the subtype equal the baseline.
+
+    `ime enable` drops the `;subtype` parts, so the exact enabled list is put back last.
+    A `null` baseline value is deleted."""
     want = ime_ids(keyboard["enabled_input_methods"])
     have = {line.strip() for line in adb.shell("ime list -s").splitlines() if line.strip()}
     for ime in sorted(want - have):
@@ -134,7 +137,8 @@ def set_keyboards(adb: Adb, keyboard: dict[str, str]) -> None:
         adb.shell(f"ime set {shlex.quote(keyboard['default_input_method'])}")
     for ime in sorted(have - want):
         adb.shell(f"ime disable {shlex.quote(ime)}")
-    _put_setting(adb, "secure", "selected_input_method_subtype", keyboard["selected_input_method_subtype"])
+    for key in KEYBOARD_SETTINGS:
+        _put_setting(adb, "secure", key, keyboard[key])
 
 
 def put_apk_back(
@@ -203,10 +207,7 @@ def compare(before: DeviceState, after: DeviceState, expected: set[str]) -> list
         add(f"package {name}", _version(before.packages.get(name)), _version(after.packages.get(name)))
     add("apk_sha256", (before.apk_sha256 or "-")[:12], (after.apk_sha256 or "-")[:12])
     for key in KEYBOARD_SETTINGS:
-        old, new = before.keyboard.get(key, "null"), after.keyboard.get(key, "null")
-        if key == "enabled_input_methods":
-            old, new = ":".join(sorted(ime_ids(old))), ":".join(sorted(ime_ids(new)))
-        add(key, old, new)
+        add(key, before.keyboard.get(key, "null"), after.keyboard.get(key, "null"))
     for key in (*DISPLAY_SETTINGS, NIGHT_MODE):
         add(key, before.display.get(key, "null"), after.display.get(key, "null"))
     add("app data", _data_summary(before.app_data_sha256), _data_summary(after.app_data_sha256))
