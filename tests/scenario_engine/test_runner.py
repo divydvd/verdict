@@ -183,3 +183,13 @@ def test_evidence_on_failure_captured_in_addition_to_always(tmp_path):
     event = result.timeline.events[0]
     kinds = {ref.kind for ref in event.evidence_refs}
     assert kinds == {"screenshot", "hierarchy"}
+
+
+def test_type_keys_step_reaches_driver_with_interval():
+    driver = FakeDeviceDriver()
+    spec = ScenarioSpec(
+        name="keys", steps=[StepSpec(action="type_keys", text="helllo ", interval_ms=200)]
+    )
+    result = run_scenario(spec, driver, session_id="s1")
+    assert result.passed is True
+    assert driver.typed_keys == [("helllo ", 200)]

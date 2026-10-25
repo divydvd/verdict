@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import tempfile
+import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -20,6 +22,7 @@ from verdict.core.models import (
     UiHierarchy,
 )
 from verdict.device_driver.android_hierarchy import parse_hierarchy_xml
+from verdict.device_driver.android_keys import key_input_commands
 
 # Maps our platform-neutral Selector field names onto uiautomator2's
 # UiSelector kwarg names (see uiautomator2._selector.Selector.__fields).
@@ -55,6 +58,7 @@ class AndroidUiautomator2Driver:
     serial: str | None = None
     evidence_dir: Path = field(default_factory=lambda: Path(tempfile.mkdtemp(prefix="verdict-android-")))
     platform: Platform = field(default=Platform.ANDROID, init=False)
+    sleep: Callable[[float], None] = field(default=time.sleep, repr=False)
 
     _device: u2.Device = field(init=False, repr=False)
     _adb: adbutils.AdbDevice = field(init=False, repr=False)
@@ -92,6 +96,13 @@ class AndroidUiautomator2Driver:
 
     def type_text(self, text: str) -> None:
         self._device.send_keys(text)
+
+    def type_keys(self, text: str, interval_ms: int = 150) -> None:
+        # One `adb shell input` call per character: a single long `input text`
+        # call races and drops characters (SmarType testing doc, caveat 1).
+        for command in key_input_commands(text):
+            self._adb.shell(command)
+            self.sleep(interval_ms / 1000)
 
     def press_key(self, key: KeyEvent) -> None:
         self._device.press(key.value)

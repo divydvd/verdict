@@ -18,11 +18,12 @@ def _ctx(driver: FakeDeviceDriver) -> RunContext:
     )
 
 
-def test_trigger_autocorrect_types_trailing_space():
+def test_trigger_autocorrect_sends_space_as_key_event_not_paste():
     driver = FakeDeviceDriver()
     step = StepSpec(action="trigger_autocorrect")
     _ACTIONS["trigger_autocorrect"](driver, step, _ctx(driver))
-    assert driver.typed_text == [" "]
+    assert driver.typed_keys == [(" ", 150)]
+    assert driver.typed_text == []
 
 
 def _suggestion_strip() -> UiNode:

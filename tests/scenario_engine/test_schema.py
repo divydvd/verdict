@@ -30,3 +30,15 @@ def test_scenario_defaults():
     assert spec.retries == RetryPolicy(max_attempts=1, backoff_ms=0)
     assert spec.covers == []
     assert spec.tags == []
+
+
+def test_type_keys_requires_text_and_defaults_interval():
+    with pytest.raises(ValueError, match="text"):
+        StepSpec(action="type_keys")
+    step = StepSpec(action="type_keys", text="helllo")
+    assert step.interval_ms == 150
+
+
+def test_type_keys_rejects_negative_interval():
+    with pytest.raises(ValueError):
+        StepSpec(action="type_keys", text="a", interval_ms=-1)
