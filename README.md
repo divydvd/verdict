@@ -18,6 +18,25 @@ is in progress on `phase-1/core-execution-substrate` per [`docs/implementation-p
 - [`docs/implementation-plan.md`](docs/implementation-plan.md) — phases, milestones, testing strategy.
 - [`docs/adr/`](docs/adr/) — architecture decision records.
 
+## Device-test baseline
+
+`verdict baseline` records a phone's state before a device test of one Android package. It
+replaces the manual adb steps of a pretest baseline (for example, step 3 of SmarType's
+`smartype-device-test` skill).
+
+```bash
+verdict baseline bha.keys.smartype.debug --packages-prefix bha.keys.smartype --dir "$EVIDENCE"
+```
+
+- It requires exactly one unlocked physical phone, user 0, and a private `--dir` (mode 700,
+  outside any git work tree, with no old `baseline.json`).
+- It records the package versions, the pretest APK (pulled, with its SHA-256), the keyboard and
+  display settings, and an app-data tar with per-file checksums (by `run-as`, so a debuggable app).
+- If the package is the default keyboard, it selects another keyboard that is not in the package
+  family, so the keyboard does not run during the backup.
+- Exit 0: saved. Exit 2: `BLOCKED: <reason>`. The phone is unchanged, or its keyboard is set back.
+- It prints names, versions, settings, and counts. It never prints app data.
+
 ## Development
 
 Requires Python 3.11+.

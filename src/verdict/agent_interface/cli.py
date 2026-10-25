@@ -15,6 +15,14 @@ import verdict.domains.ime  # noqa: F401
 from verdict.core.exceptions import VerdictError
 from verdict.device_driver.android import AndroidUiautomator2Driver
 from verdict.device_driver.base import DeviceDriver
+from verdict.device_state.adb import Adb, SubprocessAdb
+from verdict.device_state.baseline import (
+    Baseline,
+    BlockedError,
+    preflight,
+    prepare_private_folder,
+    take_baseline,
+)
 from verdict.reporting.generator import DEFAULT_FORMATS, ReportGenerator
 from verdict.scenario_engine.parser import parse_scenario
 from verdict.scenario_engine.runner import ScenarioResult, run_scenario
@@ -105,3 +113,70 @@ def run(
     click.echo(f"Report written to {output_dir}")
     if not result.passed:
         raise SystemExit(1)
+
+
+AdbFactory = Callable[[str | None], Adb]
+
+
+def _baseline_summary(baseline: Baseline, folder: Path) -> list[str]:
+    state = baseline.state
+    lines = [f"Baseline of {baseline.package} saved in {folder}"]
+    for name, version in state.packages.items():
+        lines.append(f"  package {name}: {version.version_name} ({version.version_code})")
+    if baseline.package not in state.packages:
+        lines.append(f"  {baseline.package} is not installed: no APK pull, no app-data backup")
+    if state.apk_sha256:
+        lines.append(f"  pretest APK SHA-256: {state.apk_sha256[:12]}")
+    for key, value in {**state.keyboard, **state.display}.items():
+        lines.append(f"  {key}: {value}")
+    if baseline.app_data_tar:
+        lines.append(f"  app data: {len(state.app_data_sha256)} file(s) backed up with checksums")
+    if baseline.ime_enabled_by_verdict:
+        lines.append(f"  enabled for the test: {baseline.ime_enabled_by_verdict}")
+    return lines
+
+
+def execute_baseline(
+    package: str,
+    folder: Path,
+    prefix: str | None,
+    device: str | None,
+    adb_factory: AdbFactory | None = None,
+) -> tuple[Baseline, Path]:
+    adb = (adb_factory or SubprocessAdb)(device)
+    resolved = prepare_private_folder(folder)
+    preflight(adb, device)
+    return take_baseline(adb, package, prefix or package, resolved), resolved
+
+
+@main.command()
+@click.argument("package")
+@click.option(
+    "--dir",
+    "folder",
+    required=True,
+    type=click.Path(file_okay=False, path_type=Path),
+    help="Private evidence folder (mode 700, outside any git repo) for the backups.",
+)
+@click.option(
+    "--packages-prefix",
+    default=None,
+    help="Record every package with this prefix, and never select one of their keyboards. "
+    "Default: PACKAGE.",
+)
+@click.option("--device", "-s", default=None, help="adb serial of the one connected phone.")
+def baseline(package: str, folder: Path, packages_prefix: str | None, device: str | None) -> None:
+    """Record the phone's state for PACKAGE before a device test.
+
+    Exit 0: saved. Exit 2: BLOCKED (the reason is printed); the phone is unchanged,
+    or its keyboard is set back.
+    """
+    try:
+        result, resolved = execute_baseline(package, folder, packages_prefix, device)
+    except BlockedError as exc:
+        click.echo(f"BLOCKED: {exc}")
+        raise SystemExit(2) from exc
+    except VerdictError as exc:
+        raise click.ClickException(str(exc)) from exc
+    for line in _baseline_summary(result, resolved):
+        click.echo(line)

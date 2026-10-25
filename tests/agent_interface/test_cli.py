@@ -151,3 +151,30 @@ def test_run_command_rejects_malformed_variable(tmp_path):
     runner = CliRunner()
     result = runner.invoke(cli.main, ["run", str(scenario_path), "-e", "not-a-kv-pair"])
     assert result.exit_code != 0
+
+
+def test_baseline_command_prints_summary(tmp_path, monkeypatch):
+    from tests.device_state.fake_adb import PLAY, TARGET, FakePhone
+
+    phone = FakePhone()
+    monkeypatch.setattr(cli, "SubprocessAdb", lambda serial: phone)
+    folder = tmp_path / "ev"
+    result = CliRunner().invoke(
+        cli.main, ["baseline", TARGET, "--dir", str(folder), "--packages-prefix", PLAY]
+    )
+    assert result.exit_code == 0, result.output
+    assert f"package {TARGET}: 2.0-debug+abc1234 (100)" in result.output
+    assert "app data: 2 file(s) backed up with checksums" in result.output
+    assert (folder / "baseline.json").exists()
+
+
+def test_baseline_command_exits_2_when_blocked(tmp_path, monkeypatch):
+    from tests.device_state.fake_adb import FakePhone
+
+    phone = FakePhone(devices_list=[])
+    monkeypatch.setattr(cli, "SubprocessAdb", lambda serial: phone)
+    result = CliRunner().invoke(
+        cli.main, ["baseline", "bha.keys.smartype.debug", "--dir", str(tmp_path / "e")]
+    )
+    assert result.exit_code == 2
+    assert "BLOCKED: no phone is connected" in result.output
