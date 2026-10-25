@@ -1,24 +1,8 @@
-import shutil
-import subprocess
-
 import pytest
 
 from verdict.core.models import KeyEvent, UiNode
 from verdict.device_driver.base import DeviceDriver
 from verdict.device_driver.fake import FakeDeviceDriver
-
-
-def _adb_device_attached() -> bool:
-    if shutil.which("adb") is None:
-        return False
-    try:
-        result = subprocess.run(
-            ["adb", "devices"], capture_output=True, text=True, timeout=5, check=False
-        )
-    except OSError:
-        return False
-    lines = result.stdout.splitlines()[1:]
-    return any(line.strip().endswith("device") for line in lines)
 
 
 def _assert_basic_driver_contract(driver: DeviceDriver) -> None:
@@ -42,7 +26,6 @@ def test_fake_driver_satisfies_contract():
 
 
 @pytest.mark.requires_device
-@pytest.mark.skipif(not _adb_device_attached(), reason="no adb device/emulator attached")
 def test_android_driver_satisfies_contract():
     from verdict.device_driver.android import AndroidUiautomator2Driver
 

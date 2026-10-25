@@ -17,6 +17,7 @@ _REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
     "clear_data": ("package",),
     "tap": ("selector",),
     "type_text": ("text",),
+    "type_keys": ("text",),
     "swipe": ("x1", "y1", "x2", "y2"),
     "scroll": ("direction",),
     "press_key": ("key",),
@@ -52,6 +53,7 @@ class StepSpec(BaseModel):
     x2: int | None = None
     y2: int | None = None
     duration_ms: int = 300
+    interval_ms: int = Field(default=150, ge=0)
     direction: Direction | None = None
     key: KeyEvent | None = None
 

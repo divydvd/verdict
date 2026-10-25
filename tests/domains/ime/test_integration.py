@@ -23,7 +23,7 @@ def test_ime_scenario_runs_end_to_end_through_run_scenario():
         name="ime-e2e",
         steps=[
             StepSpec(action="tap", selector={"resource_id": "text_field"}),
-            StepSpec(action="type_text", text="I recieve"),
+            StepSpec(action="type_keys", text="I recieve"),
             StepSpec(action="trigger_autocorrect"),
             StepSpec(action="assert", assertion="keyboard_visible"),
             StepSpec(action="assert", assertion="text_inserted", args={"text": "received"}),
@@ -33,4 +33,5 @@ def test_ime_scenario_runs_end_to_end_through_run_scenario():
     result = run_scenario(spec, driver, session_id="s1")
 
     assert result.passed is True
-    assert driver.typed_text == ["I recieve", " "]
+    assert driver.typed_keys == [("I recieve", 150), (" ", 150)]
+    assert driver.typed_text == []
