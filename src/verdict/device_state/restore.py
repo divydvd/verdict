@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Literal
 
 from verdict.core.exceptions import VerdictError
-from verdict.device_state.adb import Adb
+from verdict.device_state.adb import Adb, AdbError
 from verdict.device_state.baseline import (
     APP_DATA_SHA256,
     APP_DATA_TAR,
@@ -26,6 +26,7 @@ from verdict.device_state.baseline import (
     NIGHT_MODE,
     PRETEST_APK,
     Baseline,
+    BlockedError,
     DeviceState,
     PackageVersion,
     in_family,
@@ -174,6 +175,8 @@ def _installed_apk_is_pretest(adb: Adb, baseline: Baseline, folder: Path) -> boo
         return False
     try:
         return pull_apk(adb, baseline.package, folder / FINAL_APK) == baseline.state.apk_sha256
+    except (AdbError, BlockedError, OSError):
+        return False  # for example a split-APK build: not confirmed equal, so install
     finally:
         (folder / FINAL_APK).unlink(missing_ok=True)
 

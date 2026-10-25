@@ -260,3 +260,16 @@ def test_fail_skips_the_install_when_the_pretest_apk_is_still_installed(folder):
     assert skip.status == "yes" and skip.final.startswith("skipped")
     assert any("install is skipped" in note for note in report.notes)
     assert not (folder / FINAL_APK).exists()
+
+
+def test_fail_installs_when_a_split_apk_build_blocks_the_sha_probe(folder):
+    phone, baseline = baseline_then_test(folder, code=100)
+    phone.apk_paths = ["/data/app/~~x/base.apk", "/data/app/~~x/split_config.arm64.apk"]
+
+    report = restore(phone, baseline, folder, "FAIL")
+
+    assert "install -r pretest.apk" in phone.commands
+    assert report.equal, report.rows
+    assert phone.system["font_scale"] == "1.0"
+    assert "pretest APK install" not in rows(report)
+    assert not (folder / FINAL_APK).exists()
