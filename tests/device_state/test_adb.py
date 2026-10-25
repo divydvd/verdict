@@ -47,22 +47,21 @@ def test_nonzero_exit_raises(monkeypatch):
         SubprocessAdb().shell("true")
 
 
-def test_shell_with_input_sends_the_file_on_stdin(monkeypatch, tmp_path):
+def test_push_sends_the_file_without_stdin(monkeypatch, tmp_path):
     seen = {}
 
     def fake_run(argv, **kwargs):
         seen["argv"] = argv
-        seen["stdin"] = kwargs["stdin"].read()
-        return subprocess.CompletedProcess(argv, 0, stdout=b"", stderr=b"")
+        seen["stdin"] = kwargs.get("stdin")
+        return subprocess.CompletedProcess(argv, 0, stdout=b"1 file pushed", stderr=b"")
 
     monkeypatch.undo()
     monkeypatch.setattr(adb_module.subprocess, "run", fake_run)
     data = tmp_path / "app-data.tar"
-    data.write_bytes(b"tar-bytes")
-    SubprocessAdb(serial="R5CX").shell_with_input("run-as p.q tar -xf -", data)
+    SubprocessAdb(serial="R5CX").push(data, "/data/local/tmp/x/app-data.tar")
     assert seen == {
-        "argv": ["adb", "-s", "R5CX", "shell", "-T", "run-as p.q tar -xf -"],
-        "stdin": b"tar-bytes",
+        "argv": ["adb", "-s", "R5CX", "push", str(data), "/data/local/tmp/x/app-data.tar"],
+        "stdin": None,
     }
 
 

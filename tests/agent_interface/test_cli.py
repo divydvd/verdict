@@ -221,7 +221,6 @@ def test_restore_command_blocks_when_adb_fails(tmp_path, monkeypatch):
     phone, folder = _baseline_and_test(tmp_path)
     phone.fail_on = {"tar -xf"}
     monkeypatch.setattr(cli, "SubprocessAdb", lambda serial: phone)
-    phone.shell_with_input = lambda command, local: phone.shell(command)
     result = CliRunner().invoke(
         cli.main, ["restore", "bha.keys.smartype.debug", "--dir", str(folder), "--result", "PASS"]
     )

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import secrets
 import shlex
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -38,6 +39,7 @@ from verdict.device_state.baseline import (
 TestResult = Literal["PASS", "FAIL", "BLOCKED"]
 Status = Literal["yes", "no", "expected"]
 FINAL_APK = "final-check.apk"
+STAGING_ROOT = "/data/local/tmp"
 
 
 @dataclass
@@ -88,12 +90,27 @@ def _safe_data_path(path: str) -> str:
     return path
 
 
+def extract_backup(adb: Adb, package: str, tar: Path) -> None:
+    """Push the tar to a new mode-700 staging folder that only the shell user can
+    read, and extract it with a redirect on the phone. A stdin pipe through adb
+    fails on some phones. The staging folder is always deleted."""
+    staging = f"{STAGING_ROOT}/verdict-restore-{secrets.token_hex(8)}"
+    remote = f"{staging}/{APP_DATA_TAR}"
+    adb.shell(f"mkdir -m 700 {staging}")
+    try:
+        adb.push(tar, remote)
+        adb.shell(f"chmod 600 {remote}")
+        adb.shell(f"run-as {shlex.quote(package)} tar -xf - < {remote}")
+    finally:
+        adb.shell(f"rm -rf -- {staging}")
+
+
 def restore_app_data(adb: Adb, baseline: Baseline, folder: Path) -> int:
     """Extract the backup, then delete each file that is not in the baseline list,
     one exact path at a time. Return the number of deleted files."""
     package = shlex.quote(baseline.package)
     adb.shell(f"am force-stop {package}")
-    adb.shell_with_input(f"run-as {package} tar -xf -", folder / APP_DATA_TAR)
+    extract_backup(adb, baseline.package, folder / APP_DATA_TAR)
     _, now = read_app_data_checksums(adb, baseline.package)
     extra = sorted(set(now) - set(baseline.state.app_data_sha256))
     for path in extra:
@@ -143,7 +160,16 @@ def put_apk_back(
     return set()
 
 
-def read_final_state(adb: Adb, baseline: Baseline, folder: Path) -> DeviceState:
+def read_app_data_if_needed(adb: Adb, baseline: Baseline) -> dict[str, str]:
+    wanted = baseline.app_data_tar is not None or baseline.state.apk_sha256 is None
+    if wanted and baseline.package in read_packages(adb, baseline.packages_prefix):
+        return read_app_data_checksums(adb, baseline.package)[1]
+    return {}
+
+
+def read_final_state(
+    adb: Adb, baseline: Baseline, folder: Path, app_data: dict[str, str]
+) -> DeviceState:
     packages = read_packages(adb, baseline.packages_prefix)
     keyboard, display = read_settings(adb)
     state = DeviceState(packages=packages, keyboard=keyboard, display=display)
@@ -152,8 +178,7 @@ def read_final_state(adb: Adb, baseline: Baseline, folder: Path) -> DeviceState:
             state.apk_sha256 = pull_apk(adb, baseline.package, folder / FINAL_APK)
         finally:
             (folder / FINAL_APK).unlink(missing_ok=True)
-        if baseline.app_data_tar or baseline.state.apk_sha256 is None:
-            state.app_data_sha256 = read_app_data_checksums(adb, baseline.package)[1]
+        state.app_data_sha256 = app_data
     return state
 
 
@@ -207,8 +232,12 @@ def restore(adb: Adb, baseline: Baseline, folder: Path, result: TestResult) -> R
         deleted = restore_app_data(adb, baseline, folder)
         report.notes.append(f"app data extracted; {deleted} file(s) not in the baseline deleted")
     set_display(adb, state.display)
+    # Read the app data before the keyboard step: when the package is the baseline
+    # keyboard, its start writes its own files and would give a false difference.
+    app_data = read_app_data_if_needed(adb, baseline)
     set_keyboards(adb, state.keyboard)
-    report.rows = compare(state, read_final_state(adb, baseline, folder), expected)
+    final = read_final_state(adb, baseline, folder, app_data)
+    report.rows = compare(state, final, expected)
     return report
 
 

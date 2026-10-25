@@ -57,6 +57,9 @@ class FakePhone:
         default_factory=lambda: {b"pretest-apk": (100, "2.0-debug+abc1234")}
     )
     tar_override: bytes | None = None
+    keyboard_start_writes: bool = False
+    staging: dict[str, str] = field(default_factory=dict)
+    remote_files: dict[str, bytes] = field(default_factory=dict)
     fail_on: set[str] = field(default_factory=set)
     commands: list[str] = field(default_factory=list)
 
@@ -106,6 +109,26 @@ class FakePhone:
             return ""
         if words[:2] == ["ime", "set"]:
             self.secure["default_input_method"] = words[2]
+            if self.keyboard_start_writes and words[2] == TARGET_IME:
+                self.app_files["./files/analytics.db"] = b"keyboard start"
+            return ""
+        if words[:3] == ["mkdir", "-m", "700"]:
+            assert words[3].startswith("/data/local/tmp/") and words[3] not in self.staging
+            self.staging[words[3]] = "700"
+            return ""
+        if words[:2] == ["chmod", "600"]:
+            assert words[2] in self.remote_files
+            return ""
+        if words[:1] == ["run-as"] and words[2:5] == ["tar", "-xf", "-"]:
+            assert words[5] == "<"
+            self._extract(words[6])
+            return ""
+        if words[:3] == ["rm", "-rf", "--"]:
+            assert words[3] in self.staging
+            del self.staging[words[3]]
+            self.remote_files = {
+                k: v for k, v in self.remote_files.items() if not k.startswith(words[3] + "/")
+            }
             return ""
         if words[:2] == ["am", "force-stop"]:
             return ""
@@ -141,10 +164,14 @@ class FakePhone:
         self.commands.append(f"pull {remote}")
         local.write_bytes(self.apk_bytes)
 
-    def shell_with_input(self, command: str, local: Path) -> None:
-        self.commands.append(f"shell -T {command}")
-        assert command == f"run-as {TARGET} tar -xf -"
-        with tarfile.open(local) as archive:
+    def push(self, local: Path, remote: str) -> None:
+        self.commands.append(f"push {local.name} {remote}")
+        folder = remote.rsplit("/", 1)[0]
+        assert folder in self.staging, "push before mkdir"
+        self.remote_files[remote] = local.read_bytes()
+
+    def _extract(self, remote: str) -> None:
+        with tarfile.open(fileobj=io.BytesIO(self.remote_files[remote])) as archive:
             for member in archive.getmembers():
                 handle = archive.extractfile(member)
                 assert handle is not None

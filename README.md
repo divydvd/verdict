@@ -48,8 +48,11 @@ verdict restore bha.keys.smartype.debug --dir "$EVIDENCE" --result PASS|FAIL|BLO
 2. APK: after PASS, the tested build stays installed. After FAIL or BLOCKED, it installs the
    pretest APK again, but never as a downgrade. A package that was not installed at baseline
    is uninstalled after FAIL or BLOCKED (the only uninstall).
-3. App data: it extracts the backup, then deletes each file that is not in the baseline list,
-   one exact path at a time.
+3. App data: it pushes the backup to a new mode-700 folder in `/data/local/tmp` that only the
+   shell user can read, extracts it with `run-as <package> tar -xf - < <file>` on the phone, and
+   deletes the folder. Then it deletes each file that is not in the baseline list, one exact path
+   at a time. It reads the app-data checksums before the keyboard step, because the keyboard
+   start writes its own files.
 4. Settings: display settings, then the enabled keyboards, the default, and the subtype.
 5. Check: it reads the state again and prints `| item | baseline | final | equal |`. A kept
    tested build shows `expected`.

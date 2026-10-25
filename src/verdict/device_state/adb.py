@@ -27,7 +27,7 @@ class Adb(Protocol):
 
     def pull(self, remote: str, local: Path) -> None: ...
 
-    def shell_with_input(self, command: str, local: Path) -> None: ...
+    def push(self, local: Path, remote: str) -> None: ...
 
     def install(self, apk: Path) -> None: ...
 
@@ -45,7 +45,6 @@ class SubprocessAdb:
         args: list[str],
         stdout: IO[bytes] | None = None,
         use_serial: bool = True,
-        stdin: IO[bytes] | None = None,
     ) -> str:
         prefix = [self.adb_path]
         if use_serial and self.serial:
@@ -53,7 +52,6 @@ class SubprocessAdb:
         try:
             proc = subprocess.run(
                 prefix + args,
-                stdin=stdin,
                 stdout=stdout if stdout is not None else subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 timeout=self.timeout_s,
@@ -84,9 +82,8 @@ class SubprocessAdb:
     def pull(self, remote: str, local: Path) -> None:
         self._run(["pull", remote, str(local)])
 
-    def shell_with_input(self, command: str, local: Path) -> None:
-        with local.open("rb") as handle:
-            self._run(["shell", "-T", command], stdin=handle)
+    def push(self, local: Path, remote: str) -> None:
+        self._run(["push", str(local), remote])
 
     def install(self, apk: Path) -> None:
         if "Success" not in self._run(["install", "-r", str(apk)]):

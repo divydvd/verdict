@@ -55,7 +55,8 @@ def test_restore_leaves_the_target_keyboard_until_the_end(folder):
     assert first_set == f"ime set {GBOARD}"
     sets = [c for c in phone.commands if c.startswith("ime set")]
     assert sets[-1] == f"ime set {TARGET_IME}"
-    assert phone.commands.index(sets[-1]) > phone.commands.index(f"shell -T run-as {TARGET} tar -xf -")
+    extract = next(c for c in phone.commands if c.startswith(f"run-as {TARGET} tar -xf - < "))
+    assert phone.commands.index(sets[-1]) > phone.commands.index(extract)
     assert phone.commands.index(sets[-1]) > phone.commands.index("cmd uimode night no")
 
 
@@ -159,3 +160,42 @@ def test_delete_backups_keeps_the_baseline_record(folder):
 def test_ime_ids_strips_subtypes():
     assert ime_ids("a/.X;123;456:b/.Y") == {"a/.X", "b/.Y"}
     assert ime_ids("null") == set()
+
+
+def test_backup_goes_through_a_private_staging_folder_that_is_deleted(folder):
+    phone, baseline = baseline_then_test(folder, code=100)
+    restore(phone, baseline, folder, "FAIL")
+    mkdir = next(c for c in phone.commands if c.startswith("mkdir -m 700 /data/local/tmp/verdict-restore-"))
+    staging = mkdir.split()[-1]
+    remote = f"{staging}/app-data.tar"
+    order = [
+        mkdir,
+        f"push app-data.tar {remote}",
+        f"chmod 600 {remote}",
+        f"run-as {TARGET} tar -xf - < {remote}",
+        f"rm -rf -- {staging}",
+    ]
+    assert [phone.commands.index(c) for c in order] == sorted(phone.commands.index(c) for c in order)
+    assert phone.staging == {} and phone.remote_files == {}
+    assert not any(c.startswith("shell -T") for c in phone.commands)
+
+
+def test_staging_folder_is_deleted_when_the_extract_fails(folder):
+    phone, baseline = baseline_then_test(folder, code=100)
+    phone.fail_on = {"tar -xf"}
+    with pytest.raises(Exception, match="scripted failure"):
+        restore(phone, baseline, folder, "FAIL")
+    assert phone.staging == {} and phone.remote_files == {}
+
+
+def test_keyboard_start_after_the_check_point_gives_no_false_difference(folder):
+    phone, baseline = baseline_then_test(folder, code=100)
+    phone.keyboard_start_writes = True
+    report = restore(phone, baseline, folder, "FAIL")
+    assert report.equal, [r for r in report.rows if r.status == "no"]
+    assert rows(report)["app data"].status == "yes"
+    # The keyboard did start and write its file, after the app-data read.
+    assert "./files/analytics.db" in phone.app_files
+    read = max(i for i, c in enumerate(phone.commands) if "sha256sum" in c)
+    last_set = max(i for i, c in enumerate(phone.commands) if c == f"ime set {TARGET_IME}")
+    assert read < last_set
