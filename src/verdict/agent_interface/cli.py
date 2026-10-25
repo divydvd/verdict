@@ -15,13 +15,20 @@ import verdict.domains.ime  # noqa: F401
 from verdict.core.exceptions import VerdictError
 from verdict.device_driver.android import AndroidUiautomator2Driver
 from verdict.device_driver.base import DeviceDriver
-from verdict.device_state.adb import Adb, SubprocessAdb
+from verdict.device_state.adb import Adb, AdbError, SubprocessAdb
 from verdict.device_state.baseline import (
     Baseline,
     BlockedError,
     preflight,
     prepare_private_folder,
     take_baseline,
+)
+from verdict.device_state.restore import (
+    RestoreReport,
+    TestResult,
+    delete_backups,
+    load_baseline,
+    restore,
 )
 from verdict.reporting.generator import DEFAULT_FORMATS, ReportGenerator
 from verdict.scenario_engine.parser import parse_scenario
@@ -180,3 +187,64 @@ def baseline(package: str, folder: Path, packages_prefix: str | None, device: st
         raise click.ClickException(str(exc)) from exc
     for line in _baseline_summary(result, resolved):
         click.echo(line)
+
+
+def execute_restore(
+    package: str,
+    folder: Path,
+    result: TestResult,
+    device: str | None,
+    adb_factory: AdbFactory | None = None,
+) -> RestoreReport:
+    baseline = load_baseline(folder, package)
+    adb = (adb_factory or SubprocessAdb)(device)
+    preflight(adb, device, check_lock=False)
+    try:
+        return restore(adb, baseline, folder, result)
+    except (AdbError, VerdictError) as exc:
+        raise BlockedError(f"the restore stopped; finish it by hand from the skill: {exc}") from exc
+
+
+@main.command(name="restore")
+@click.argument("package")
+@click.option(
+    "--dir",
+    "folder",
+    required=True,
+    type=click.Path(file_okay=False, exists=True, path_type=Path),
+    help="The evidence folder that `verdict baseline` used.",
+)
+@click.option(
+    "--result",
+    required=True,
+    type=click.Choice(["PASS", "FAIL", "BLOCKED"]),
+    help="PASS keeps the tested build. FAIL or BLOCKED installs the pretest APK (never a downgrade).",
+)
+@click.option("--keep-backup", is_flag=True, help="Keep the backup files after a good check.")
+@click.option("--device", "-s", default=None, help="adb serial of the one connected phone.")
+def restore_command(
+    package: str, folder: Path, result: TestResult, keep_backup: bool, device: str | None
+) -> None:
+    """Put the phone back to the baseline of PACKAGE after a device test.
+
+    Exit 0: equal to the baseline (expected differences allowed). Exit 1: a difference
+    stays. Exit 2: BLOCKED (the reason is printed).
+    """
+    try:
+        report = execute_restore(package, folder, result, device)
+    except BlockedError as exc:
+        click.echo(f"BLOCKED: {exc}")
+        raise SystemExit(2) from exc
+    except VerdictError as exc:
+        raise click.ClickException(str(exc)) from exc
+    for note in report.notes:
+        click.echo(f"- {note}")
+    click.echo("| item | baseline | final | equal |\n| --- | --- | --- | --- |")
+    for row in report.rows:
+        click.echo(f"| {row.item} | {row.baseline} | {row.final} | {row.status} |")
+    if not report.equal:
+        click.echo("Restore check: a difference stays. The backups are kept.")
+        raise SystemExit(1)
+    if not keep_backup:
+        delete_backups(folder)
+    click.echo("Restore check: equal to the baseline" + ("." if keep_backup else "; backups deleted."))

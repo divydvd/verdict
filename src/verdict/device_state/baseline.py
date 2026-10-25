@@ -89,7 +89,7 @@ def prepare_private_folder(folder: Path) -> Path:
     return folder
 
 
-def preflight(adb: Adb, serial: str | None) -> None:
+def preflight(adb: Adb, serial: str | None, check_lock: bool = True) -> None:
     devices = adb.devices()
     if not devices:
         raise BlockedError("no phone is connected")
@@ -105,7 +105,7 @@ def preflight(adb: Adb, serial: str | None) -> None:
     user = adb.shell("am get-current-user").strip()
     if user != "0":
         raise BlockedError(f"the current user is {user!r}, not 0")
-    if _LOCKED.search(adb.shell("dumpsys window")):
+    if check_lock and _LOCKED.search(adb.shell("dumpsys window")):
         raise BlockedError("the phone is locked")
 
 

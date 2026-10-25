@@ -178,3 +178,52 @@ def test_baseline_command_exits_2_when_blocked(tmp_path, monkeypatch):
     )
     assert result.exit_code == 2
     assert "BLOCKED: no phone is connected" in result.output
+
+
+def _baseline_and_test(tmp_path):
+    from tests.device_state.fake_adb import PLAY, TARGET, FakePhone
+    from verdict.device_state.baseline import prepare_private_folder, take_baseline
+
+    phone = FakePhone()
+    folder = prepare_private_folder(tmp_path / "ev")
+    take_baseline(phone, TARGET, PLAY, folder)
+    phone.run_candidate_test(code=100)
+    return phone, folder
+
+
+def test_restore_command_prints_table_and_deletes_backups(tmp_path, monkeypatch):
+    phone, folder = _baseline_and_test(tmp_path)
+    monkeypatch.setattr(cli, "SubprocessAdb", lambda serial: phone)
+    result = CliRunner().invoke(
+        cli.main, ["restore", "bha.keys.smartype.debug", "--dir", str(folder), "--result", "FAIL"]
+    )
+    assert result.exit_code == 0, result.output
+    assert "| item | baseline | final | equal |" in result.output
+    assert "| font_scale | 1.0 | 1.0 | yes |" in result.output
+    assert "backups deleted" in result.output
+    assert not (folder / "app-data.tar").exists()
+    assert (folder / "baseline.json").exists()
+
+
+def test_restore_command_exits_1_and_keeps_backups_on_a_difference(tmp_path, monkeypatch):
+    phone, folder = _baseline_and_test(tmp_path)
+    phone.builds[b"pretest-apk"] = (100, "something-else")
+    monkeypatch.setattr(cli, "SubprocessAdb", lambda serial: phone)
+    result = CliRunner().invoke(
+        cli.main, ["restore", "bha.keys.smartype.debug", "--dir", str(folder), "--result", "FAIL"]
+    )
+    assert result.exit_code == 1, result.output
+    assert "| no |" in result.output
+    assert (folder / "app-data.tar").exists()
+
+
+def test_restore_command_blocks_when_adb_fails(tmp_path, monkeypatch):
+    phone, folder = _baseline_and_test(tmp_path)
+    phone.fail_on = {"tar -xf"}
+    monkeypatch.setattr(cli, "SubprocessAdb", lambda serial: phone)
+    phone.shell_with_input = lambda command, local: phone.shell(command)
+    result = CliRunner().invoke(
+        cli.main, ["restore", "bha.keys.smartype.debug", "--dir", str(folder), "--result", "PASS"]
+    )
+    assert result.exit_code == 2
+    assert "BLOCKED: the restore stopped" in result.output

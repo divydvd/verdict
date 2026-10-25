@@ -27,6 +27,12 @@ class Adb(Protocol):
 
     def pull(self, remote: str, local: Path) -> None: ...
 
+    def shell_with_input(self, command: str, local: Path) -> None: ...
+
+    def install(self, apk: Path) -> None: ...
+
+    def uninstall(self, package: str) -> None: ...
+
 
 @dataclass
 class SubprocessAdb:
@@ -34,13 +40,20 @@ class SubprocessAdb:
     adb_path: str = "adb"
     timeout_s: float = 300.0
 
-    def _run(self, args: list[str], stdout: IO[bytes] | None = None, use_serial: bool = True) -> str:
+    def _run(
+        self,
+        args: list[str],
+        stdout: IO[bytes] | None = None,
+        use_serial: bool = True,
+        stdin: IO[bytes] | None = None,
+    ) -> str:
         prefix = [self.adb_path]
         if use_serial and self.serial:
             prefix += ["-s", self.serial]
         try:
             proc = subprocess.run(
                 prefix + args,
+                stdin=stdin,
                 stdout=stdout if stdout is not None else subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 timeout=self.timeout_s,
@@ -70,3 +83,15 @@ class SubprocessAdb:
 
     def pull(self, remote: str, local: Path) -> None:
         self._run(["pull", remote, str(local)])
+
+    def shell_with_input(self, command: str, local: Path) -> None:
+        with local.open("rb") as handle:
+            self._run(["shell", "-T", command], stdin=handle)
+
+    def install(self, apk: Path) -> None:
+        if "Success" not in self._run(["install", "-r", str(apk)]):
+            raise AdbError(f"`adb install -r {apk.name}` did not report Success")
+
+    def uninstall(self, package: str) -> None:
+        if "Success" not in self._run(["uninstall", package]):
+            raise AdbError(f"`adb uninstall {package}` did not report Success")

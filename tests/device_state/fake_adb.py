@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import shlex
 import tarfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -52,6 +53,9 @@ class FakePhone:
     app_files: dict[str, bytes] = field(
         default_factory=lambda: {"./shared_prefs/a.xml": b"<a/>", "./files/b.db": b"db"}
     )
+    builds: dict[bytes, tuple[int, str]] = field(
+        default_factory=lambda: {b"pretest-apk": (100, "2.0-debug+abc1234")}
+    )
     tar_override: bytes | None = None
     fail_on: set[str] = field(default_factory=set)
     commands: list[str] = field(default_factory=list)
@@ -62,6 +66,9 @@ class FakePhone:
     def _enabled(self) -> list[str]:
         value = self.secure["enabled_input_methods"]
         return [part.split(";")[0] for part in value.split(":") if part]
+
+    def _table(self, namespace: str) -> dict[str, str]:
+        return {"secure": self.secure, "system": self.system, "global": self.global_}[namespace]
 
     def shell(self, command: str) -> str:
         self.commands.append(command)
@@ -81,8 +88,7 @@ class FakePhone:
         if words[:2] == ["pm", "path"]:
             return "".join(f"package:{path}\n" for path in self.apk_paths)
         if words[:2] == ["settings", "get"]:
-            table = {"secure": self.secure, "system": self.system, "global": self.global_}[words[2]]
-            return table.get(words[3], "null") + "\n"
+            return self._table(words[2]).get(words[3], "null") + "\n"
         if command == "cmd uimode night":
             return f"Night mode: {self.night}\n"
         if command == "ime list -s":
@@ -103,6 +109,20 @@ class FakePhone:
             return ""
         if words[:2] == ["am", "force-stop"]:
             return ""
+        if words[:2] == ["settings", "put"]:
+            self._table(words[2])[words[3]] = shlex.split(command)[4]
+            return ""
+        if words[:2] == ["settings", "delete"]:
+            self._table(words[2]).pop(words[3], None)
+            return ""
+        if words[:3] == ["cmd", "uimode", "night"] and len(words) == 4:
+            self.night = words[3]
+            return ""
+        if words[:1] == ["run-as"] and words[2:5] == ["rm", "-f", "--"]:
+            path = shlex.split(command)[5]
+            assert "*" not in path
+            self.app_files.pop(path, None)
+            return ""
         if words[:1] == ["run-as"] and "sha256sum" in command:
             import hashlib
 
@@ -120,3 +140,37 @@ class FakePhone:
     def pull(self, remote: str, local: Path) -> None:
         self.commands.append(f"pull {remote}")
         local.write_bytes(self.apk_bytes)
+
+    def shell_with_input(self, command: str, local: Path) -> None:
+        self.commands.append(f"shell -T {command}")
+        assert command == f"run-as {TARGET} tar -xf -"
+        with tarfile.open(local) as archive:
+            for member in archive.getmembers():
+                handle = archive.extractfile(member)
+                assert handle is not None
+                self.app_files[member.name] = handle.read()
+
+    def install(self, apk: Path) -> None:
+        data = apk.read_bytes()
+        self.commands.append(f"install -r {apk.name}")
+        if TARGET in self.packages and self.builds[data][0] < self.packages[TARGET][0]:
+            raise AdbError("INSTALL_FAILED_VERSION_DOWNGRADE")
+        self.packages[TARGET] = self.builds[data]
+        self.apk_bytes = data
+
+    def uninstall(self, package: str) -> None:
+        self.commands.append(f"uninstall {package}")
+        del self.packages[package]
+        self.app_files = {}
+
+    def run_candidate_test(self, code: int = 101) -> None:
+        """What a device test does: install a candidate, use the app, change settings."""
+        self.builds[b"candidate-apk"] = (code, f"candidate-{code}")
+        self.packages[TARGET] = self.builds[b"candidate-apk"]
+        self.apk_bytes = b"candidate-apk"
+        self.app_files["./shared_prefs/a.xml"] = b"<changed/>"
+        self.app_files["./files/new.db"] = b"new"
+        self.system["font_scale"] = "1.5"
+        self.night = "yes"
+        self.secure["default_input_method"] = TARGET_IME
+        self.secure["enabled_input_methods"] = f"{TARGET_IME}:{GBOARD}:{SAMSUNG}"

@@ -37,6 +37,25 @@ verdict baseline bha.keys.smartype.debug --packages-prefix bha.keys.smartype --d
 - Exit 0: saved. Exit 2: `BLOCKED: <reason>`. The phone is unchanged, or its keyboard is set back.
 - It prints names, versions, settings, and counts. It never prints app data.
 
+After the test, `verdict restore` puts the phone back (step 7 of the same skill):
+
+```bash
+verdict restore bha.keys.smartype.debug --dir "$EVIDENCE" --result PASS|FAIL|BLOCKED [--keep-backup]
+```
+
+1. Keyboard: it selects the baseline keyboard. If that is the package, it selects another
+   keyboard until the end.
+2. APK: after PASS, the tested build stays installed. After FAIL or BLOCKED, it installs the
+   pretest APK again, but never as a downgrade. A package that was not installed at baseline
+   is uninstalled after FAIL or BLOCKED (the only uninstall).
+3. App data: it extracts the backup, then deletes each file that is not in the baseline list,
+   one exact path at a time.
+4. Settings: display settings, then the enabled keyboards, the default, and the subtype.
+5. Check: it reads the state again and prints `| item | baseline | final | equal |`. A kept
+   tested build shows `expected`.
+6. Exit 0: equal, and the backups are deleted (unless `--keep-backup`). Exit 1: a difference
+   stays, and the backups are kept. Exit 2: `BLOCKED: <reason>`.
+
 ## Development
 
 Requires Python 3.11+.

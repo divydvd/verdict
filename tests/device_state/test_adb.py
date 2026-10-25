@@ -45,3 +45,35 @@ def test_nonzero_exit_raises(monkeypatch):
     )
     with pytest.raises(AdbError, match="exited 1: no devices"):
         SubprocessAdb().shell("true")
+
+
+def test_shell_with_input_sends_the_file_on_stdin(monkeypatch, tmp_path):
+    seen = {}
+
+    def fake_run(argv, **kwargs):
+        seen["argv"] = argv
+        seen["stdin"] = kwargs["stdin"].read()
+        return subprocess.CompletedProcess(argv, 0, stdout=b"", stderr=b"")
+
+    monkeypatch.undo()
+    monkeypatch.setattr(adb_module.subprocess, "run", fake_run)
+    data = tmp_path / "app-data.tar"
+    data.write_bytes(b"tar-bytes")
+    SubprocessAdb(serial="R5CX").shell_with_input("run-as p.q tar -xf -", data)
+    assert seen == {
+        "argv": ["adb", "-s", "R5CX", "shell", "-T", "run-as p.q tar -xf -"],
+        "stdin": b"tar-bytes",
+    }
+
+
+@pytest.mark.parametrize("method", ["install", "uninstall"])
+def test_install_and_uninstall_need_success(monkeypatch, tmp_path, method):
+    monkeypatch.undo()
+    monkeypatch.setattr(
+        adb_module.subprocess,
+        "run",
+        lambda argv, **kw: subprocess.CompletedProcess(argv, 0, stdout=b"Failure [X]", stderr=b""),
+    )
+    arg = tmp_path / "a.apk" if method == "install" else "p.q"
+    with pytest.raises(AdbError, match="did not report Success"):
+        getattr(SubprocessAdb(), method)(arg)
