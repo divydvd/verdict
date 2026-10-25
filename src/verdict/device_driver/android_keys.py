@@ -5,6 +5,7 @@ Kept free of uiautomator2/adbutils so the mapping is unit-testable without a dev
 
 from __future__ import annotations
 
+import re
 import shlex
 
 from verdict.core.exceptions import DriverError
@@ -19,6 +20,29 @@ _CHAR_KEYCODES: dict[str, str] = {
     "*": "KEYCODE_STAR",
     "@": "KEYCODE_AT",
 }
+
+
+_KEYCODE_NAME = re.compile(r"KEYCODE_[A-Z0-9_]+")
+
+
+def keyevent_command(key: int | str) -> str:
+    """Return the `adb shell` command for one Android key code: a number
+    (`18`) or a name with or without the `KEYCODE_` prefix (`POUND`)."""
+    if isinstance(key, int):
+        if key < 0:
+            raise DriverError(f"key code must be 0 or more, got {key}")
+        return f"input keyevent {key}"
+    name = key.strip().upper()
+    if not name.startswith("KEYCODE_"):
+        name = f"KEYCODE_{name}"
+    if not _KEYCODE_NAME.fullmatch(name):
+        raise DriverError(f"invalid Android key code name {key!r}")
+    return f"input keyevent {name}"
+
+
+def input_failed(output: str) -> bool:
+    """`adb shell input` exits 0 for an unknown key code; it prints an error instead."""
+    return "Exception" in output or "Error" in output
 
 
 def key_input_command(char: str) -> str:

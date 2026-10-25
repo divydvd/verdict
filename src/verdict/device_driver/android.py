@@ -16,13 +16,15 @@ from verdict.core.exceptions import DriverError, ElementNotFoundError
 from verdict.core.models import (
     Direction,
     KeyEvent,
+    KeyInput,
     Platform,
     RecordingHandle,
     Selector,
     UiHierarchy,
+    normalize_key,
 )
-from verdict.device_driver.android_hierarchy import parse_hierarchy_xml
-from verdict.device_driver.android_keys import key_input_commands
+from verdict.device_driver.android_hierarchy import dump_with_retry
+from verdict.device_driver.android_keys import input_failed, key_input_commands, keyevent_command
 
 # Maps our platform-neutral Selector field names onto uiautomator2's
 # UiSelector kwarg names (see uiautomator2._selector.Selector.__fields).
@@ -59,6 +61,8 @@ class AndroidUiautomator2Driver:
     evidence_dir: Path = field(default_factory=lambda: Path(tempfile.mkdtemp(prefix="verdict-android-")))
     platform: Platform = field(default=Platform.ANDROID, init=False)
     sleep: Callable[[float], None] = field(default=time.sleep, repr=False)
+    dump_attempts: int = 3
+    dump_retry_ms: int = 250
 
     _device: u2.Device = field(init=False, repr=False)
     _adb: adbutils.AdbDevice = field(init=False, repr=False)
@@ -101,11 +105,23 @@ class AndroidUiautomator2Driver:
         # One `adb shell input` call per character: a single long `input text`
         # call races and drops characters (SmarType testing doc, caveat 1).
         for command in key_input_commands(text):
-            self._adb.shell(command)
+            self._shell_input(command)
             self.sleep(interval_ms / 1000)
 
-    def press_key(self, key: KeyEvent) -> None:
-        self._device.press(key.value)
+    def press_key(self, key: KeyInput) -> None:
+        try:
+            normalized = normalize_key(key)
+        except ValueError as exc:
+            raise DriverError(str(exc)) from exc
+        if isinstance(normalized, KeyEvent):
+            self._device.press(normalized.value)
+            return
+        self._shell_input(keyevent_command(normalized))
+
+    def _shell_input(self, command: str) -> None:
+        output = str(self._adb.shell(command))
+        if input_failed(output):
+            raise DriverError(f"`{command}` failed: {output.strip()}")
 
     def screenshot(self) -> Path:
         self.evidence_dir.mkdir(parents=True, exist_ok=True)
@@ -114,8 +130,13 @@ class AndroidUiautomator2Driver:
         return path
 
     def dump_hierarchy(self) -> UiHierarchy:
-        raw_xml = self._device.dump_hierarchy()
-        return UiHierarchy(raw_xml=raw_xml, root=parse_hierarchy_xml(raw_xml))
+        return dump_with_retry(
+            self._device.dump_hierarchy,
+            attempts=self.dump_attempts,
+            pause_s=self.dump_retry_ms / 1000,
+            sleep=self.sleep,
+            retry_on=(u2.exceptions.BaseException,),
+        )
 
     def wait_for(self, selector: Selector, timeout_ms: int) -> bool:
         return bool(self._ui_object(selector).wait(timeout=timeout_ms / 1000))

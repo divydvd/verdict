@@ -339,7 +339,7 @@ class InputDriver(Protocol):
     def scroll(self, direction: Direction, selector: Selector | None = None) -> None: ...
     def type_text(self, text: str) -> None: ...                # may paste; not key events
     def type_keys(self, text: str, interval_ms: int = 150) -> None: ...  # one key input per char
-    def press_key(self, key: KeyEvent) -> None: ...          # BACK, HOME, ENTER, ...
+    def press_key(self, key: KeyEvent | int | str) -> None: ...  # BACK, HOME, ... or any key code
     def screenshot(self) -> Path: ...
     def dump_hierarchy(self) -> UiHierarchy: ...
     def wait_for(self, selector: Selector, timeout_ms: int) -> bool: ...
@@ -377,7 +377,9 @@ class DeviceDriver(InputDriver, AppLifecycleDriver, DiagnosticsDriver, Protocol)
   `list_scenarios` filtering).
 - `parser.py` — loads + validates a scenario file, resolves `${var}` substitution.
 - `runner.py` — executes steps against a `DeviceDriver`, handles retry/backoff and wait
-  conditions, invokes assertions, writes `TimelineEvent`s to the Evidence Collector.
+  conditions, invokes assertions, writes `TimelineEvent`s to the Evidence Collector. A failed
+  `assert` step is re-checked after a short settle (`settle_ms`, `settle_attempts`), because the
+  hierarchy can lag a fast UI transition; the message records the re-checks.
 - `actions/` — built-in reusable step types (`tap`, `type_text`, `type_keys`, `swipe`, `wait_for`,
   `maestro_flow`) — IME-specific actions live in `domains/ime/actions.py`, not here.
 

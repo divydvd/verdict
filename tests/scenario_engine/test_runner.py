@@ -80,7 +80,7 @@ def test_run_scenario_failing_assertion_fails_and_stops():
     spec = ScenarioSpec(
         name="fails",
         steps=[
-            StepSpec(action="assert", assertion="always_fail"),
+            StepSpec(action="assert", assertion="always_fail", settle_ms=0),
             StepSpec(action="type_text", text="never runs"),
         ],
     )
@@ -116,7 +116,7 @@ def test_retries_whole_scenario_until_max_attempts():
     driver = _driver_with_chip()
     spec = ScenarioSpec(
         name="retry",
-        steps=[StepSpec(action="assert", assertion="always_fail")],
+        steps=[StepSpec(action="assert", assertion="always_fail", settle_attempts=0)],
         retries=RetryPolicy(max_attempts=3, backoff_ms=10),
     )
     sleeps: list[float] = []
@@ -142,7 +142,7 @@ def test_retries_stop_early_on_success():
     driver = _driver_with_chip()
     spec = ScenarioSpec(
         name="flaky",
-        steps=[StepSpec(action="assert", assertion="flaky")],
+        steps=[StepSpec(action="assert", assertion="flaky", settle_attempts=0)],
         retries=RetryPolicy(max_attempts=3, backoff_ms=0),
     )
 
@@ -193,3 +193,84 @@ def test_type_keys_step_reaches_driver_with_interval():
     result = run_scenario(spec, driver, session_id="s1")
     assert result.passed is True
     assert driver.typed_keys == [("helllo ", 200)]
+
+
+def test_press_key_step_passes_key_code_to_driver():
+    driver = FakeDeviceDriver()
+    spec = ScenarioSpec(name="keys", steps=[StepSpec(action="press_key", key="KEYCODE_POUND")])
+    assert run_scenario(spec, driver, session_id="s1").passed is True
+    assert driver.pressed_keys == ["KEYCODE_POUND"]
+
+
+def _counting_assertion(name: str, pass_on_call: int | None):
+    calls = {"n": 0}
+
+    class _Counting:
+        def check(self, ctx):
+            calls["n"] += 1
+            passed = pass_on_call is not None and calls["n"] >= pass_on_call
+            return AssertionResult(passed=passed, message="node found" if passed else "no node")
+
+    _Counting.name = name
+    assertion_registry.register(name, lambda: _Counting())
+    return calls
+
+
+def test_failed_assertion_passes_on_settle_recheck():
+    calls = _counting_assertion("late_node", pass_on_call=2)
+    spec = ScenarioSpec(
+        name="settle", steps=[StepSpec(action="assert", assertion="late_node", settle_ms=300)]
+    )
+    sleeps: list[float] = []
+
+    result = run_scenario(spec, _driver_with_chip(), session_id="s1", sleep=sleeps.append)
+
+    assert result.passed is True
+    assert result.attempts == 1
+    assert calls["n"] == 2
+    assert sleeps == [0.3]
+    message = result.timeline.events[0].assertion_results[0].message
+    assert message == "node found (passed on re-check 1 after 300 ms)"
+
+
+def test_real_failure_is_rechecked_then_reported():
+    calls = _counting_assertion("never_node", pass_on_call=None)
+    spec = ScenarioSpec(
+        name="settle-fail",
+        steps=[StepSpec(action="assert", assertion="never_node", settle_ms=100, settle_attempts=2)],
+    )
+    sleeps: list[float] = []
+
+    result = run_scenario(spec, _driver_with_chip(), session_id="s1", sleep=sleeps.append)
+
+    assert result.passed is False
+    assert calls["n"] == 3
+    assert sleeps == [0.1, 0.1]
+    assert result.timeline.events[0].error == "no node (still failing after 2 re-check(s))"
+
+
+def test_settle_attempts_zero_disables_recheck():
+    calls = _counting_assertion("no_recheck", pass_on_call=2)
+    spec = ScenarioSpec(
+        name="no-settle",
+        steps=[StepSpec(action="assert", assertion="no_recheck", settle_attempts=0)],
+    )
+
+    result = run_scenario(spec, _driver_with_chip(), session_id="s1", sleep=lambda _: None)
+
+    assert result.passed is False
+    assert calls["n"] == 1
+    assert result.timeline.events[0].error == "no node"
+
+
+def test_wait_for_failure_is_not_rechecked():
+    driver = FakeDeviceDriver()
+    spec = ScenarioSpec(
+        name="wait", steps=[StepSpec(action="wait_for", selector={"resource_id": "x"})]
+    )
+    sleeps: list[float] = []
+
+    result = run_scenario(spec, driver, session_id="s1", sleep=sleeps.append)
+
+    assert result.passed is False
+    assert sleeps == []

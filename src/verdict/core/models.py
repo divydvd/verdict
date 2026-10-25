@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
@@ -28,6 +29,38 @@ class KeyEvent(str, Enum):
     ENTER = "enter"
     DELETE = "delete"
     TAB = "tab"
+
+
+KeyInput = KeyEvent | int | str
+"""A key for `press_key`: a named `KeyEvent`, or any platform key code as a
+number (`18`) or a name (`KEYCODE_POUND`, or `POUND`)."""
+
+_KEY_NAME = re.compile(r"[A-Za-z0-9_]+")
+
+
+def normalize_key(value: object) -> KeyInput:
+    """Validate a key and return its canonical form: a `KeyEvent` for the
+    named keys ("enter", "back", ...), an `int` for a numeric key code, or an
+    upper-case key name. Raises `ValueError` for anything else.
+    """
+    if isinstance(value, KeyEvent):
+        return value
+    if isinstance(value, int) and not isinstance(value, bool):
+        if value < 0:
+            raise ValueError(f"key code must be 0 or more, got {value}")
+        return value
+    if isinstance(value, str):
+        name = value.strip()
+        if name.isdigit():
+            return int(name)
+        try:
+            return KeyEvent(name.lower())
+        except ValueError:
+            pass
+        if not _KEY_NAME.fullmatch(name):
+            raise ValueError(f"key name may use only letters, digits, and '_', got {value!r}")
+        return name.upper()
+    raise ValueError(f"key must be a KeyEvent, a key code number, or a key name, got {value!r}")
 
 
 class Selector(BaseModel):

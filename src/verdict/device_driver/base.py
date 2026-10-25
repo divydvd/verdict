@@ -6,7 +6,7 @@ from typing import Protocol, runtime_checkable
 
 from verdict.core.models import (
     Direction,
-    KeyEvent,
+    KeyInput,
     Platform,
     RecordingHandle,
     Selector,
@@ -39,7 +39,10 @@ class InputDriver(Protocol):
         """
         ...
 
-    def press_key(self, key: KeyEvent) -> None: ...
+    def press_key(self, key: KeyInput) -> None:
+        """Press one key: a `KeyEvent`, or any platform key code
+        (for Android, a number or a name such as `KEYCODE_POUND`)."""
+        ...
 
     def screenshot(self) -> Path: ...
 
