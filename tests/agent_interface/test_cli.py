@@ -151,3 +151,95 @@ def test_run_command_rejects_malformed_variable(tmp_path):
     runner = CliRunner()
     result = runner.invoke(cli.main, ["run", str(scenario_path), "-e", "not-a-kv-pair"])
     assert result.exit_code != 0
+
+
+def test_baseline_command_prints_summary(tmp_path, monkeypatch):
+    from tests.device_state.fake_adb import PLAY, TARGET, FakePhone
+
+    phone = FakePhone()
+    monkeypatch.setattr(cli, "SubprocessAdb", lambda serial: phone)
+    folder = tmp_path / "ev"
+    result = CliRunner().invoke(
+        cli.main, ["baseline", TARGET, "--dir", str(folder), "--packages-prefix", PLAY]
+    )
+    assert result.exit_code == 0, result.output
+    assert f"package {TARGET}: 2.0-debug+abc1234 (100)" in result.output
+    assert "app data: 2 file(s) backed up with checksums" in result.output
+    assert (folder / "baseline.json").exists()
+
+
+def test_baseline_command_exits_2_when_blocked(tmp_path, monkeypatch):
+    from tests.device_state.fake_adb import FakePhone
+
+    phone = FakePhone(devices_list=[])
+    monkeypatch.setattr(cli, "SubprocessAdb", lambda serial: phone)
+    result = CliRunner().invoke(
+        cli.main, ["baseline", "bha.keys.smartype.debug", "--dir", str(tmp_path / "e")]
+    )
+    assert result.exit_code == 2
+    assert "BLOCKED: no phone is connected" in result.output
+
+
+def _baseline_and_test(tmp_path):
+    from tests.device_state.fake_adb import PLAY, TARGET, FakePhone
+    from verdict.device_state.baseline import prepare_private_folder, take_baseline
+
+    phone = FakePhone()
+    folder = prepare_private_folder(tmp_path / "ev")
+    take_baseline(phone, TARGET, PLAY, folder)
+    phone.run_candidate_test(code=100)
+    return phone, folder
+
+
+def test_restore_command_prints_table_and_deletes_backups(tmp_path, monkeypatch):
+    phone, folder = _baseline_and_test(tmp_path)
+    monkeypatch.setattr(cli, "SubprocessAdb", lambda serial: phone)
+    result = CliRunner().invoke(
+        cli.main, ["restore", "bha.keys.smartype.debug", "--dir", str(folder), "--result", "FAIL"]
+    )
+    assert result.exit_code == 0, result.output
+    assert "| item | baseline | final | equal |" in result.output
+    assert "| font_scale | 1.0 | 1.0 | yes |" in result.output
+    assert "backups deleted" in result.output
+    assert not (folder / "app-data.tar").exists()
+    assert (folder / "baseline.json").exists()
+
+
+def test_restore_command_exits_1_and_keeps_backups_on_a_difference(tmp_path, monkeypatch):
+    phone, folder = _baseline_and_test(tmp_path)
+    phone.builds[b"pretest-apk"] = (100, "something-else")
+    monkeypatch.setattr(cli, "SubprocessAdb", lambda serial: phone)
+    result = CliRunner().invoke(
+        cli.main, ["restore", "bha.keys.smartype.debug", "--dir", str(folder), "--result", "FAIL"]
+    )
+    assert result.exit_code == 1, result.output
+    assert "| no |" in result.output
+    assert (folder / "app-data.tar").exists()
+
+
+def test_restore_command_blocks_when_adb_fails(tmp_path, monkeypatch):
+    phone, folder = _baseline_and_test(tmp_path)
+    phone.fail_on = {"tar -xf"}
+    monkeypatch.setattr(cli, "SubprocessAdb", lambda serial: phone)
+    result = CliRunner().invoke(
+        cli.main, ["restore", "bha.keys.smartype.debug", "--dir", str(folder), "--result", "PASS"]
+    )
+    assert result.exit_code == 2
+    assert "BLOCKED: the restore stopped" in result.output
+
+
+def test_restore_command_blocks_when_adb_fails_in_the_preflight(tmp_path, monkeypatch):
+    from verdict.device_state.adb import AdbError
+
+    phone, folder = _baseline_and_test(tmp_path)
+
+    def broken_devices():
+        raise AdbError("`adb devices` failed: no server")
+
+    phone.devices = broken_devices
+    monkeypatch.setattr(cli, "SubprocessAdb", lambda serial: phone)
+    result = CliRunner().invoke(
+        cli.main, ["restore", "bha.keys.smartype.debug", "--dir", str(folder), "--result", "FAIL"]
+    )
+    assert result.exit_code == 2, result.output
+    assert "BLOCKED: the preflight check failed" in result.output
