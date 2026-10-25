@@ -42,3 +42,17 @@ def test_type_keys_requires_text_and_defaults_interval():
 def test_type_keys_rejects_negative_interval():
     with pytest.raises(ValueError):
         StepSpec(action="type_keys", text="a", interval_ms=-1)
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [("enter", "enter"), ("KEYCODE_POUND", "KEYCODE_POUND"), (62, 62), ("pound", "POUND")],
+)
+def test_press_key_accepts_any_key_code(raw, expected):
+    step = StepSpec(action="press_key", key=raw)
+    assert step.key == expected
+
+
+def test_press_key_rejects_invalid_key_name():
+    with pytest.raises(ValidationError):
+        StepSpec(action="press_key", key="POUND; reboot")

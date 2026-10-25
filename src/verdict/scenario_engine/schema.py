@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Annotated, Any
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, BeforeValidator, Field, model_validator
 
-from verdict.core.models import Direction, KeyEvent, Selector
+from verdict.core.models import Direction, KeyInput, Selector, normalize_key
 
 # One entry per action name: the StepSpec fields that must be non-None for
 # that action. Mirrors the DeviceDriver protocol methods 1:1 (plus `assert`
@@ -55,7 +55,8 @@ class StepSpec(BaseModel):
     duration_ms: int = 300
     interval_ms: int = Field(default=150, ge=0)
     direction: Direction | None = None
-    key: KeyEvent | None = None
+    # A named KeyEvent ("enter") or any platform key code (18, "KEYCODE_POUND").
+    key: Annotated[KeyInput, BeforeValidator(normalize_key)] | None = None
 
     @model_validator(mode="after")
     def _validate_required_fields(self) -> StepSpec:

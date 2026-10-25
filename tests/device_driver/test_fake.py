@@ -123,3 +123,11 @@ def test_type_keys_records_text_and_interval():
     driver.type_keys("helllo ", interval_ms=200)
     assert driver.typed_keys == [("helllo ", 200)]
     assert driver.typed_text == []
+
+
+def test_press_key_records_normalized_key_codes():
+    driver = FakeDeviceDriver()
+    driver.press_key("KEYCODE_POUND")
+    driver.press_key(62)
+    driver.press_key("enter")
+    assert driver.pressed_keys == ["KEYCODE_POUND", 62, KeyEvent.ENTER]

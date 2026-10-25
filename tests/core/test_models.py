@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
-from verdict.core.models import Selector, UiHierarchy, UiNode
+from verdict.core.models import KeyEvent, Selector, UiHierarchy, UiNode, normalize_key
 
 
 def test_selector_requires_at_least_one_field():
@@ -61,3 +61,26 @@ def test_hierarchy_find_on_empty_root_returns_none():
     hierarchy = UiHierarchy(raw_xml="<xml/>", root=None)
     assert hierarchy.find(Selector(resource_id="anything")) is None
     assert hierarchy.find_all(Selector(resource_id="anything")) == []
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        (KeyEvent.BACK, KeyEvent.BACK),
+        ("enter", KeyEvent.ENTER),
+        ("DELETE", KeyEvent.DELETE),
+        (18, 18),
+        ("18", 18),
+        ("KEYCODE_POUND", "KEYCODE_POUND"),
+        ("pound", "POUND"),
+        (" space ", "SPACE"),
+    ],
+)
+def test_normalize_key_accepts_named_keys_and_any_key_code(raw, expected):
+    assert normalize_key(raw) == expected
+
+
+@pytest.mark.parametrize("raw", [-1, True, "", "KEYCODE POUND", "rm -rf", "a;b", 1.5, None])
+def test_normalize_key_rejects_invalid_keys(raw):
+    with pytest.raises(ValueError):
+        normalize_key(raw)

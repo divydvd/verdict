@@ -2,21 +2,27 @@ import pytest
 
 import verdict.device_driver.android as android_module
 from verdict.core.exceptions import DriverError
+from verdict.core.models import KeyEvent
 from verdict.device_driver.android import AndroidUiautomator2Driver
 
 
 class _FakeAdb:
     def __init__(self) -> None:
         self.commands: list[str] = []
+        self.output = ""
 
     def shell(self, command: str) -> str:
         self.commands.append(command)
-        return ""
+        return self.output
 
 
 class _FakeU2Device:
     def __init__(self) -> None:
         self.adb_device = _FakeAdb()
+        self.pressed: list[str] = []
+
+    def press(self, key: str) -> None:
+        self.pressed.append(key)
 
 
 @pytest.fixture
@@ -42,4 +48,34 @@ def test_type_keys_sends_one_adb_call_per_character_with_pause(driver):
 def test_type_keys_sends_nothing_when_text_has_unsupported_character(driver):
     with pytest.raises(DriverError):
         driver.type_keys("caf\u00e9")
+    assert driver._adb.commands == []
+
+
+def test_press_key_keeps_uiautomator2_path_for_named_keys(driver):
+    driver.press_key(KeyEvent.ENTER)
+    driver.press_key("back")
+    assert driver._device.pressed == ["enter", "back"]
+    assert driver._adb.commands == []
+
+
+def test_press_key_sends_any_key_code_through_input_keyevent(driver):
+    driver.press_key("KEYCODE_POUND")
+    driver.press_key(62)
+    driver.press_key("dpad_left")
+    assert driver._adb.commands == [
+        "input keyevent KEYCODE_POUND",
+        "input keyevent 62",
+        "input keyevent KEYCODE_DPAD_LEFT",
+    ]
+
+
+def test_press_key_raises_when_device_rejects_key_code(driver):
+    driver._adb.output = "Error: Unknown keycode: KEYCODE_NOPE"
+    with pytest.raises(DriverError, match="Unknown keycode"):
+        driver.press_key("NOPE")
+
+
+def test_press_key_rejects_invalid_key_before_adb(driver):
+    with pytest.raises(DriverError):
+        driver.press_key("POUND; reboot")
     assert driver._adb.commands == []

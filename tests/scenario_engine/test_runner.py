@@ -193,3 +193,10 @@ def test_type_keys_step_reaches_driver_with_interval():
     result = run_scenario(spec, driver, session_id="s1")
     assert result.passed is True
     assert driver.typed_keys == [("helllo ", 200)]
+
+
+def test_press_key_step_passes_key_code_to_driver():
+    driver = FakeDeviceDriver()
+    spec = ScenarioSpec(name="keys", steps=[StepSpec(action="press_key", key="KEYCODE_POUND")])
+    assert run_scenario(spec, driver, session_id="s1").passed is True
+    assert driver.pressed_keys == ["KEYCODE_POUND"]

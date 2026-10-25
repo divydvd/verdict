@@ -1,7 +1,12 @@
 import pytest
 
 from verdict.core.exceptions import DriverError
-from verdict.device_driver.android_keys import key_input_command, key_input_commands
+from verdict.device_driver.android_keys import (
+    input_failed,
+    key_input_command,
+    key_input_commands,
+    keyevent_command,
+)
 
 
 def test_letters_use_one_input_text_call_each():
@@ -43,3 +48,28 @@ def test_unsupported_characters_raise_before_any_input(char):
 def test_rejects_multi_character_input():
     with pytest.raises(DriverError):
         key_input_command("ab")
+
+
+@pytest.mark.parametrize(
+    ("key", "command"),
+    [
+        (18, "input keyevent 18"),
+        ("KEYCODE_POUND", "input keyevent KEYCODE_POUND"),
+        ("pound", "input keyevent KEYCODE_POUND"),
+        ("DPAD_LEFT", "input keyevent KEYCODE_DPAD_LEFT"),
+    ],
+)
+def test_keyevent_command_accepts_number_or_name(key, command):
+    assert keyevent_command(key) == command
+
+
+@pytest.mark.parametrize("key", [-3, "POUND;reboot", "KEYCODE_", "a b"])
+def test_keyevent_command_rejects_invalid_keys(key):
+    with pytest.raises(DriverError):
+        keyevent_command(key)
+
+
+def test_input_failed_detects_error_output():
+    assert input_failed("Error: Unknown keycode: KEYCODE_NOPE")
+    assert input_failed("java.lang.IllegalArgumentException: ...")
+    assert not input_failed("")
