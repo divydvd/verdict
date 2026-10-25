@@ -180,7 +180,7 @@ def baseline(package: str, folder: Path, packages_prefix: str | None, device: st
     """
     try:
         result, resolved = execute_baseline(package, folder, packages_prefix, device)
-    except BlockedError as exc:
+    except (BlockedError, OSError) as exc:
         click.echo(f"BLOCKED: {exc}")
         raise SystemExit(2) from exc
     except VerdictError as exc:

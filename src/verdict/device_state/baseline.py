@@ -24,6 +24,7 @@ BASELINE_FILE = "baseline.json"
 PRETEST_APK = "pretest.apk"
 APP_DATA_TAR = "app-data.tar"
 APP_DATA_SHA256 = "app-data.sha256"
+OUTPUT_FILES = (BASELINE_FILE, PRETEST_APK, APP_DATA_TAR, APP_DATA_SHA256)
 
 KEYBOARD_SETTINGS = ("default_input_method", "enabled_input_methods", "selected_input_method_subtype")
 DISPLAY_SETTINGS = {
@@ -84,8 +85,9 @@ def prepare_private_folder(folder: Path) -> Path:
     if folder.stat().st_uid != os.getuid():
         raise VerdictError(f"{folder} is not owned by the current user")
     folder.chmod(0o700)
-    if (folder / BASELINE_FILE).exists():
-        raise VerdictError(f"{folder} already has a baseline; restore it first or use a new folder")
+    # An old file or a symlink at an output path could be overwritten or followed.
+    if old := [n for n in OUTPUT_FILES if os.path.lexists(folder / n)]:
+        raise VerdictError(f"{folder} already has {', '.join(old)}; restore or use a new folder")
     return folder
 
 
@@ -153,37 +155,36 @@ def pull_apk(adb: Adb, package: str, dest: Path) -> str:
     if len(paths) != 1:
         raise BlockedError(f"{package} has {len(paths)} APK files; only a single APK is supported")
     adb.pull(paths[0], dest)
+    dest.chmod(0o600)
     return sha256_file(dest)
 
 
 def read_app_data_checksums(adb: Adb, package: str) -> tuple[str, dict[str, str]]:
-    raw = adb.shell(
-        f"run-as {shlex.quote(package)} find . -type f -exec sha256sum {{}} + | sort -k 2"
-    )
+    # No remote pipe: a pipe would hide a failed `find`/`sha256sum` (adb gives the last exit code).
+    raw = adb.shell(f"run-as {shlex.quote(package)} find . -type f -exec sha256sum {{}} +")
     checksums: dict[str, str] = {}
     for line in raw.splitlines():
         parts = line.split(None, 1)
         if len(parts) != 2 or not re.fullmatch(r"[0-9a-f]{64}", parts[0]):
             raise AdbError(f"unexpected checksum line for {package}")
         checksums[parts[1]] = parts[0]
-    return raw, checksums
+    return "".join(f"{checksums[p]}  {p}\n" for p in sorted(checksums)), checksums
 
 
-def select_other_keyboard(adb: Adb, prefix: str) -> str | None:
+def select_other_keyboard(adb: Adb, prefix: str, baseline: Baseline, folder: Path) -> None:
     """Select an enabled keyboard outside the package family. If there is none,
-    enable one first and return its id, so that restore can disable it again."""
+    enable one first and save its id, so that restore can disable it again."""
     enabled = [ime.strip() for ime in adb.shell("ime list -s").splitlines() if ime.strip()]
     others = [ime for ime in enabled if not in_family(ime, prefix)]
-    enabled_now: str | None = None
     if not others:
         every = [ime.strip() for ime in adb.shell("ime list -a -s").splitlines() if ime.strip()]
         others = [ime for ime in every if not in_family(ime, prefix)]
         if not others:
             raise BlockedError("no other keyboard is installed")
-        enabled_now = others[0]
-        adb.shell(f"ime enable {shlex.quote(enabled_now)}")
+        baseline.ime_enabled_by_verdict = others[0]
+        save_baseline(folder, baseline)
+        adb.shell(f"ime enable {shlex.quote(others[0])}")
     adb.shell(f"ime set {shlex.quote(others[0])}")
-    return enabled_now
 
 
 def put_keyboard_back(adb: Adb, baseline: Baseline) -> None:
@@ -211,16 +212,18 @@ def _backup_app_data(adb: Adb, package: str, folder: Path) -> dict[str, str]:
     sha_path.write_text(raw)
     sha_path.chmod(0o600)
     with tarfile.open(tar_path) as archive:
-        names = {name if name.startswith("./") else f"./{name}" for name in archive.getnames()}
-    missing = [path for path in checksums if path not in names]
-    if missing:
-        raise BlockedError(f"the app-data backup misses {len(missing)} file(s)")
+        files = [m.name for m in archive.getmembers() if m.isfile() or m.islnk()]
+    names = {name if name.startswith("./") else f"./{name}" for name in files}
+    if names != set(checksums):
+        raise BlockedError(f"the tar has {len(names)} file(s), the checksums {len(checksums)}")
     return checksums
 
 
 def take_baseline(adb: Adb, package: str, prefix: str, folder: Path) -> Baseline:
     check_package_name(package)
     check_package_name(prefix)
+    if not in_family(package, prefix):
+        raise VerdictError(f"{package} is not in the --packages-prefix family {prefix}")
     packages = read_packages(adb, prefix)
     installed = package in packages
     keyboard, display = read_settings(adb)
@@ -236,15 +239,14 @@ def take_baseline(adb: Adb, package: str, prefix: str, folder: Path) -> Baseline
     if not installed:
         return baseline
 
-    if in_family(keyboard["default_input_method"], package):
-        baseline.ime_enabled_by_verdict = select_other_keyboard(adb, prefix)
-        save_baseline(folder, baseline)
     try:
+        if in_family(keyboard["default_input_method"], package):
+            select_other_keyboard(adb, prefix, baseline, folder)
         adb.shell(f"am force-stop {shlex.quote(package)}")
         baseline.state.app_data_sha256 = _backup_app_data(adb, package, folder)
-    except (AdbError, BlockedError) as exc:
+        baseline.app_data_tar = APP_DATA_TAR
+        save_baseline(folder, baseline)
+    except (AdbError, BlockedError, OSError, tarfile.TarError) as exc:
         put_keyboard_back(adb, baseline)
-        raise BlockedError(f"the app-data backup failed, keyboard set back: {exc}") from exc
-    baseline.app_data_tar = APP_DATA_TAR
-    save_baseline(folder, baseline)
+        raise BlockedError(f"the baseline failed, keyboard set back: {exc}") from exc
     return baseline

@@ -223,7 +223,7 @@ def restore(adb: Adb, baseline: Baseline, folder: Path, result: TestResult) -> R
     if keyboard_is_target:
         current = adb.shell("settings get secure default_input_method").strip()
         if in_family(current, package):
-            select_other_keyboard(adb, baseline.packages_prefix)
+            select_other_keyboard(adb, baseline.packages_prefix, baseline, folder)
     elif default != "null":
         adb.shell(f"ime enable {shlex.quote(default)}")
         adb.shell(f"ime set {shlex.quote(default)}")

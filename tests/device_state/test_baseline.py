@@ -1,5 +1,6 @@
 import json
 import stat
+import tarfile
 
 import pytest
 
@@ -36,8 +37,17 @@ def test_private_folder_refuses_a_git_work_tree(tmp_path):
 
 def test_private_folder_refuses_an_old_baseline(folder):
     (folder / BASELINE_FILE).write_text("{}")
-    with pytest.raises(VerdictError, match="already has a baseline"):
+    with pytest.raises(VerdictError, match="already has baseline.json"):
         prepare_private_folder(folder)
+
+
+def test_private_folder_refuses_a_symlink_at_an_output_path(tmp_path, folder):
+    victim = tmp_path / "victim"
+    victim.write_text("keep")
+    (folder / PRETEST_APK).symlink_to(victim)
+    with pytest.raises(VerdictError, match="already has pretest.apk"):
+        prepare_private_folder(folder)
+    assert victim.read_text() == "keep"
 
 
 @pytest.mark.parametrize(
@@ -91,8 +101,11 @@ def test_baseline_records_everything_and_switches_keyboard(folder):
     assert force_stop < phone.commands.index(f"exec-out run-as {TARGET} tar -cf - .")
     saved = Baseline.model_validate_json((folder / BASELINE_FILE).read_text())
     assert saved == baseline
-    for name in (BASELINE_FILE, APP_DATA_TAR, APP_DATA_SHA256):
+    for name in (BASELINE_FILE, PRETEST_APK, APP_DATA_TAR, APP_DATA_SHA256):
         assert stat.S_IMODE((folder / name).stat().st_mode) == 0o600
+    sha_lines = (folder / APP_DATA_SHA256).read_text().splitlines()
+    assert [line.split()[1] for line in sha_lines] == ["./files/b.db", "./shared_prefs/a.xml"]
+    assert not any("|" in c for c in phone.commands)
 
 
 def test_baseline_reads_before_it_changes_the_phone(folder):
@@ -166,8 +179,67 @@ def test_backup_that_misses_a_file_blocks(folder):
 
     phone = FakePhone()
     phone.tar_override = make_tar({"./shared_prefs/a.xml": b"<a/>"})
-    with pytest.raises(BlockedError, match="misses 1 file"):
+    with pytest.raises(BlockedError, match="tar has 1 file"):
         take_baseline(phone, TARGET, PLAY, folder)
+
+
+@pytest.mark.parametrize("output", ["", f"{'0' * 64}  ./files/b.db\n"])
+def test_short_checksum_list_blocks(folder, output):
+    # A failed remote `find`/`sha256sum` gives empty or short output.
+    phone = FakePhone(checksum_override=output)
+    with pytest.raises(BlockedError, match="tar has 2 file"):
+        take_baseline(phone, TARGET, PLAY, folder)
+    assert phone.secure["default_input_method"] == TARGET_IME
+
+
+def test_target_outside_the_prefix_is_refused_before_any_command(folder):
+    phone = FakePhone()
+    with pytest.raises(VerdictError, match="--packages-prefix"):
+        take_baseline(phone, TARGET, "com.other", folder)
+    assert phone.commands == []
+
+
+def test_failed_keyboard_select_disables_the_enabled_keyboard_and_blocks(folder):
+    phone = FakePhone(fail_on={f"ime set {GBOARD}"})
+    phone.secure["enabled_input_methods"] = TARGET_IME
+    with pytest.raises(BlockedError, match="keyboard set back"):
+        take_baseline(phone, TARGET, PLAY, folder)
+    assert phone.secure["default_input_method"] == TARGET_IME
+    assert phone.secure["enabled_input_methods"] == TARGET_IME
+
+
+@pytest.mark.parametrize("error", [OSError("disk full"), tarfile.TarError("bad tar")])
+def test_file_and_tar_errors_set_keyboard_back_and_block(folder, monkeypatch, error):
+    from verdict.device_state import baseline as module
+
+    def fail(*args, **kwargs):
+        raise error
+
+    monkeypatch.setattr(module, "_backup_app_data", fail)
+    phone = FakePhone()
+    with pytest.raises(BlockedError, match="keyboard set back"):
+        take_baseline(phone, TARGET, PLAY, folder)
+    assert phone.secure["default_input_method"] == TARGET_IME
+
+
+def test_failed_final_save_sets_keyboard_back_and_blocks(folder, monkeypatch):
+    from verdict.device_state import baseline as module
+
+    real_save = module.save_baseline
+    calls = []
+
+    def save(folder, baseline):
+        calls.append(baseline.app_data_tar)
+        if baseline.app_data_tar:
+            raise OSError("disk full")
+        real_save(folder, baseline)
+
+    monkeypatch.setattr(module, "save_baseline", save)
+    phone = FakePhone()
+    with pytest.raises(BlockedError, match="keyboard set back"):
+        take_baseline(phone, TARGET, PLAY, folder)
+    assert calls[-1] == APP_DATA_TAR
+    assert phone.secure["default_input_method"] == TARGET_IME
 
 
 def test_invalid_package_name_is_rejected_before_any_command(folder):
