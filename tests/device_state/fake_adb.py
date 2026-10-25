@@ -53,6 +53,7 @@ class FakePhone:
         default_factory=lambda: {"./shared_prefs/a.xml": b"<a/>", "./files/b.db": b"db"}
     )
     tar_override: bytes | None = None
+    checksum_override: str | None = None
     fail_on: set[str] = field(default_factory=set)
     commands: list[str] = field(default_factory=list)
 
@@ -106,9 +107,11 @@ class FakePhone:
         if words[:1] == ["run-as"] and "sha256sum" in command:
             import hashlib
 
+            if self.checksum_override is not None:
+                return self.checksum_override
             return "".join(
                 f"{hashlib.sha256(data).hexdigest()}  {name}\n"
-                for name, data in sorted(self.app_files.items())
+                for name, data in self.app_files.items()
             )
         raise AssertionError(f"unexpected adb shell command: {command}")
 
