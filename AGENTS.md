@@ -7,7 +7,7 @@ This file gives guidance to coding agents (Copilot, Claude Code, and others) whe
 
 ### Commands
 - Set up once: `python3.12 -m venv .venv && .venv/bin/pip install -e '.[dev]'` (Python 3.11 or later).
-- Tests: `.venv/bin/pytest -q`. The tests use `FakeDeviceDriver` and need no phone. Tests marked `requires_device` need a phone; do not run them without the owner's approval.
+- Tests: `.venv/bin/pytest -q`. The tests use `FakeDeviceDriver` and need no phone. Tests marked `requires_device` need a phone. They run only with `--run-device`; do not use that flag without the owner's approval. Without it, `tests/conftest.py` blocks `adb` and `uiautomator2.connect`.
 - Lint: `.venv/bin/ruff check .`
 - Type check: `.venv/bin/mypy src`
 
