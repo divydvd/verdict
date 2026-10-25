@@ -116,3 +116,10 @@ def test_stop_recording_with_unknown_handle_raises():
     other = FakeDeviceDriver().start_recording()
     with pytest.raises(ValueError):
         driver.stop_recording(other)
+
+
+def test_type_keys_records_text_and_interval():
+    driver = FakeDeviceDriver()
+    driver.type_keys("helllo ", interval_ms=200)
+    assert driver.typed_keys == [("helllo ", 200)]
+    assert driver.typed_text == []

@@ -1,7 +1,7 @@
 """SmarType/IME-specific step actions. See docs/architecture.md §6.2, §3.8.
 
 Each action is implemented purely in terms of the existing `DeviceDriver`
-protocol (tap/swipe/type_text/dump_hierarchy) rather than adding new driver
+protocol (tap/swipe/type_keys/dump_hierarchy) rather than adding new driver
 methods — keeping ADR-0007's protocol surface stable while still letting a
 domain bundle introduce new step vocabulary.
 """
@@ -28,9 +28,10 @@ def _center(node: UiNode) -> tuple[int, int]:
 def _do_trigger_autocorrect(driver: DeviceDriver, step: StepSpec, ctx: RunContext) -> AssertionResult | None:
     """Commits the word currently being typed the same way a user would —
     by typing a trailing space, which is what fires SmarType's autocorrect
-    (see CLAUDE.md "Autocorrect Feature" §Commit Flows).
+    (see CLAUDE.md "Autocorrect Feature" §Commit Flows). Uses `type_keys`:
+    a pasted space (`type_text`) is not a key event, so autocorrect never runs.
     """
-    driver.type_text(" ")
+    driver.type_keys(" ")
     return None
 
 

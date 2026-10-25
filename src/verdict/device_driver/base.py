@@ -31,6 +31,14 @@ class InputDriver(Protocol):
 
     def type_text(self, text: str) -> None: ...
 
+    def type_keys(self, text: str, interval_ms: int = 150) -> None:
+        """Send `text` one character at a time as real key input, with a
+        pause of `interval_ms` after each character. Unlike `type_text`
+        (which can paste the whole string), this drives the keyboard's
+        key-event path, so key-driven behaviour such as autocorrect runs.
+        """
+        ...
+
     def press_key(self, key: KeyEvent) -> None: ...
 
     def screenshot(self) -> Path: ...
