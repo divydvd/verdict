@@ -54,6 +54,10 @@ class StepSpec(BaseModel):
     y2: int | None = None
     duration_ms: int = 300
     interval_ms: int = Field(default=150, ge=0)
+    # `assert` only: re-check a failed assertion after a pause, so a fast UI
+    # transition does not give a false failure. 0 attempts turns this off.
+    settle_ms: int = Field(default=300, ge=0)
+    settle_attempts: int = Field(default=2, ge=0)
     direction: Direction | None = None
     # A named KeyEvent ("enter") or any platform key code (18, "KEYCODE_POUND").
     key: Annotated[KeyInput, BeforeValidator(normalize_key)] | None = None

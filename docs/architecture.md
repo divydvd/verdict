@@ -377,7 +377,9 @@ class DeviceDriver(InputDriver, AppLifecycleDriver, DiagnosticsDriver, Protocol)
   `list_scenarios` filtering).
 - `parser.py` — loads + validates a scenario file, resolves `${var}` substitution.
 - `runner.py` — executes steps against a `DeviceDriver`, handles retry/backoff and wait
-  conditions, invokes assertions, writes `TimelineEvent`s to the Evidence Collector.
+  conditions, invokes assertions, writes `TimelineEvent`s to the Evidence Collector. A failed
+  `assert` step is re-checked after a short settle (`settle_ms`, `settle_attempts`), because the
+  hierarchy can lag a fast UI transition; the message records the re-checks.
 - `actions/` — built-in reusable step types (`tap`, `type_text`, `type_keys`, `swipe`, `wait_for`,
   `maestro_flow`) — IME-specific actions live in `domains/ime/actions.py`, not here.
 

@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import re
 import xml.etree.ElementTree as ET
+from collections.abc import Callable
 
-from verdict.core.models import UiNode
+from verdict.core.exceptions import DriverError
+from verdict.core.models import UiHierarchy, UiNode
 
 _BOUNDS_PATTERN = re.compile(r"\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]")
 
@@ -37,3 +39,35 @@ def parse_hierarchy_xml(raw_xml: str) -> UiNode | None:
     if root_element is None:
         return None
     return _node_from_element(root_element)
+
+
+def dump_with_retry(
+    dump: Callable[[], str],
+    *,
+    attempts: int,
+    pause_s: float,
+    sleep: Callable[[float], None],
+    retry_on: tuple[type[Exception], ...],
+) -> UiHierarchy:
+    """Dump and parse the hierarchy. Right after a fast Compose transition the
+    dump can fail or come back with no root node. Pause `pause_s` and dump
+    again, up to `attempts` dumps in total. Raises `DriverError` when every
+    dump fails; returns the last empty hierarchy when every dump is empty.
+    """
+    retryable: tuple[type[Exception], ...] = (ET.ParseError, *retry_on)
+    last_error: Exception | None = None
+    hierarchy: UiHierarchy | None = None
+    for attempt in range(max(1, attempts)):
+        if attempt:
+            sleep(pause_s)
+        try:
+            raw_xml = dump()
+            hierarchy = UiHierarchy(raw_xml=raw_xml, root=parse_hierarchy_xml(raw_xml))
+        except retryable as exc:
+            last_error = exc
+            continue
+        if hierarchy.root is not None:
+            return hierarchy
+    if hierarchy is not None:
+        return hierarchy
+    raise DriverError(f"hierarchy dump failed after {max(1, attempts)} attempt(s): {last_error}")

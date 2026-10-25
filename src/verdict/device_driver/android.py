@@ -23,7 +23,7 @@ from verdict.core.models import (
     UiHierarchy,
     normalize_key,
 )
-from verdict.device_driver.android_hierarchy import parse_hierarchy_xml
+from verdict.device_driver.android_hierarchy import dump_with_retry
 from verdict.device_driver.android_keys import input_failed, key_input_commands, keyevent_command
 
 # Maps our platform-neutral Selector field names onto uiautomator2's
@@ -61,6 +61,8 @@ class AndroidUiautomator2Driver:
     evidence_dir: Path = field(default_factory=lambda: Path(tempfile.mkdtemp(prefix="verdict-android-")))
     platform: Platform = field(default=Platform.ANDROID, init=False)
     sleep: Callable[[float], None] = field(default=time.sleep, repr=False)
+    dump_attempts: int = 3
+    dump_retry_ms: int = 250
 
     _device: u2.Device = field(init=False, repr=False)
     _adb: adbutils.AdbDevice = field(init=False, repr=False)
@@ -128,8 +130,13 @@ class AndroidUiautomator2Driver:
         return path
 
     def dump_hierarchy(self) -> UiHierarchy:
-        raw_xml = self._device.dump_hierarchy()
-        return UiHierarchy(raw_xml=raw_xml, root=parse_hierarchy_xml(raw_xml))
+        return dump_with_retry(
+            self._device.dump_hierarchy,
+            attempts=self.dump_attempts,
+            pause_s=self.dump_retry_ms / 1000,
+            sleep=self.sleep,
+            retry_on=(u2.exceptions.BaseException,),
+        )
 
     def wait_for(self, selector: Selector, timeout_ms: int) -> bool:
         return bool(self._ui_object(selector).wait(timeout=timeout_ms / 1000))

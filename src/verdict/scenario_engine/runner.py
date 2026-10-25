@@ -112,7 +112,37 @@ def register_action_handler(
     _ACTIONS[name] = handler
 
 
-def _run_once(spec: ScenarioSpec, driver: DeviceDriver, ctx: RunContext, timeline: Timeline) -> bool:
+def _settle_and_recheck(
+    driver: DeviceDriver,
+    step: StepSpec,
+    ctx: RunContext,
+    first: AssertionResult,
+    sleep: Callable[[float], None],
+) -> AssertionResult:
+    """Re-check a failed `assert` step after `settle_ms`, up to
+    `settle_attempts` times. The hierarchy can lag a fast Compose transition
+    (SmarType testing doc, caveat 3). The message says how many re-checks ran.
+    """
+    result = first
+    for recheck in range(1, step.settle_attempts + 1):
+        sleep(step.settle_ms / 1000)
+        result = _do_assert(driver, step, ctx)
+        if result.passed:
+            message = f"{result.message} (passed on re-check {recheck} after {step.settle_ms} ms)"
+            return result.model_copy(update={"message": message})
+    if step.settle_attempts:
+        message = f"{result.message} (still failing after {step.settle_attempts} re-check(s))"
+        result = result.model_copy(update={"message": message})
+    return result
+
+
+def _run_once(
+    spec: ScenarioSpec,
+    driver: DeviceDriver,
+    ctx: RunContext,
+    timeline: Timeline,
+    sleep: Callable[[float], None] = time.sleep,
+) -> bool:
     collector = EvidenceCollector(driver, ctx.evidence_dir)
     for index, step in enumerate(spec.steps):
         step_id = f"{index}:{step.action}"
@@ -124,6 +154,8 @@ def _run_once(spec: ScenarioSpec, driver: DeviceDriver, ctx: RunContext, timelin
         try:
             action_fn = _ACTIONS[step.action]
             result = action_fn(driver, step, ctx)
+            if step.action == "assert" and result is not None and not result.passed:
+                result = _settle_and_recheck(driver, step, ctx, result, sleep)
         except VerdictError as exc:
             passed = False
             error = str(exc)
@@ -186,7 +218,7 @@ def run_scenario(
             evidence_dir=resolved_evidence_dir,
         )
         timeline = Timeline(run_id=resolved_run_id, scenario_name=spec.name)
-        passed = _run_once(spec, driver, ctx, timeline)
+        passed = _run_once(spec, driver, ctx, timeline, sleep)
         if passed:
             return ScenarioResult(passed=True, attempts=attempt, timeline=timeline)
         if attempt < max_attempts and spec.retries.backoff_ms:
