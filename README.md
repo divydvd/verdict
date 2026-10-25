@@ -46,5 +46,6 @@ pip install -e ".[dev]"
 pytest
 ```
 
-Device-dependent tests (marked `@requires_device`) are skipped unless a device/emulator is
-attached and `adb` is on `PATH`.
+Device-dependent tests (marked `@requires_device`) are skipped unless you pass `--run-device`.
+Without that flag, no test can start `adb` or open a uiautomator2 connection, even when a phone
+is attached. Use `--run-device` only when you have the phone.
