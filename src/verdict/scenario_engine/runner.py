@@ -52,6 +52,11 @@ def _do_type_text(driver: DeviceDriver, step: StepSpec, ctx: RunContext) -> None
     driver.type_text(step.text)
 
 
+def _do_type_keys(driver: DeviceDriver, step: StepSpec, ctx: RunContext) -> None:
+    assert step.text is not None
+    driver.type_keys(step.text, step.interval_ms)
+
+
 def _do_swipe(driver: DeviceDriver, step: StepSpec, ctx: RunContext) -> None:
     assert step.x1 is not None and step.y1 is not None and step.x2 is not None and step.y2 is not None
     driver.swipe(step.x1, step.y1, step.x2, step.y2, step.duration_ms)
@@ -87,6 +92,7 @@ _ACTIONS: dict[str, Callable[[DeviceDriver, StepSpec, RunContext], AssertionResu
     "clear_data": _do_clear_data,
     "tap": _do_tap,
     "type_text": _do_type_text,
+    "type_keys": _do_type_keys,
     "swipe": _do_swipe,
     "scroll": _do_scroll,
     "press_key": _do_press_key,

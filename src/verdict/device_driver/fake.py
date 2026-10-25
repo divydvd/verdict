@@ -41,6 +41,7 @@ class FakeDeviceDriver:
     swipe_calls: list[tuple[int, int, int, int, int]] = field(default_factory=list, init=False)
     scroll_calls: list[tuple[Direction, Selector | None]] = field(default_factory=list, init=False)
     typed_text: list[str] = field(default_factory=list, init=False)
+    typed_keys: list[tuple[str, int]] = field(default_factory=list, init=False)
     pressed_keys: list[KeyEvent] = field(default_factory=list, init=False)
     screenshots_taken: list[Path] = field(default_factory=list, init=False)
     logs_collected: list[Path] = field(default_factory=list, init=False)
@@ -75,6 +76,9 @@ class FakeDeviceDriver:
 
     def type_text(self, text: str) -> None:
         self.typed_text.append(text)
+
+    def type_keys(self, text: str, interval_ms: int = 150) -> None:
+        self.typed_keys.append((text, interval_ms))
 
     def press_key(self, key: KeyEvent) -> None:
         self.pressed_keys.append(key)
