@@ -20,14 +20,26 @@ class _FakeObject:
         self.log.append("click")
 
 
+class _FakeAdb:
+    def shell(self, command: str) -> str:
+        return ""
+
+
 class _FakeU2Device:
     def __init__(self, log: list[object], bounds: list[dict[str, int]]) -> None:
-        self.adb_device = object()
+        self.adb_device = _FakeAdb()
         self.log = log
         self.obj = _FakeObject(log, bounds)
 
     def __call__(self, **kwargs: str) -> _FakeObject:
         return self.obj
+
+    # The driver can restart the uiautomator2 server at start (verdict#12).
+    def stop_uiautomator(self, wait: bool = True) -> None:
+        pass
+
+    def start_uiautomator(self) -> None:
+        pass
 
     def app_start(self, package: str, activity: str | None = None) -> None:
         self.log.append("launch")
