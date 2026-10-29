@@ -20,6 +20,13 @@ class _FakeU2Device:
     def __init__(self) -> None:
         self.adb_device = _FakeAdb()
         self.pressed: list[str] = []
+        self.server_calls: list[str] = []
+
+    def stop_uiautomator(self, wait: bool = True) -> None:
+        self.server_calls.append(f"stop wait={wait}")
+
+    def start_uiautomator(self) -> None:
+        self.server_calls.append("start")
 
     def press(self, key: str) -> None:
         self.pressed.append(key)
@@ -31,6 +38,7 @@ def driver(monkeypatch, tmp_path):
     sleeps: list[float] = []
     drv = AndroidUiautomator2Driver(evidence_dir=tmp_path, sleep=sleeps.append)
     drv.recorded_sleeps = sleeps  # type: ignore[attr-defined]
+    drv._adb.commands.clear()
     return drv
 
 
@@ -79,3 +87,13 @@ def test_press_key_rejects_invalid_key_before_adb(driver):
     with pytest.raises(DriverError):
         driver.press_key("POUND; reboot")
     assert driver._adb.commands == []
+
+
+def test_driver_start_stops_a_stale_server_and_starts_its_own(monkeypatch, tmp_path):
+    # verdict#10: a server from an earlier run dies when adbd flushes to the
+    # closed stream of that run. The driver must not reuse it.
+    device = _FakeU2Device()
+    monkeypatch.setattr(android_module.u2, "connect", lambda *args: device)
+    AndroidUiautomator2Driver(evidence_dir=tmp_path)
+    assert device.adb_device.commands == ["pkill -f 'com.wetest.uia2.Mai[n]'"]
+    assert device.server_calls == ["stop wait=True", "start"]

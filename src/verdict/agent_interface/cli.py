@@ -13,7 +13,7 @@ import click
 # has to happen somewhere above it -- the CLI entry point is that place.
 import verdict.domains.ime  # noqa: F401
 from verdict.core.exceptions import VerdictError
-from verdict.device_driver.android import AndroidUiautomator2Driver
+from verdict.device_driver.android import CONNECTION_ERRORS, AndroidUiautomator2Driver
 from verdict.device_driver.base import DeviceDriver
 from verdict.device_state.adb import Adb, AdbError, SubprocessAdb
 from verdict.device_state.baseline import (
@@ -114,6 +114,9 @@ def run(
         result = execute_run(scenario_path, var_dict, output_dir, format_tuple, device)
     except VerdictError as exc:
         raise click.ClickException(str(exc)) from exc
+    except CONNECTION_ERRORS as exc:
+        click.echo(f"BLOCKED: the device connection failed: {type(exc).__name__}: {exc}", err=True)
+        raise SystemExit(2) from exc
 
     status = "PASSED" if result.passed else "FAILED"
     click.echo(f"{result.timeline.scenario_name}: {status} ({result.attempts} attempt(s))")
