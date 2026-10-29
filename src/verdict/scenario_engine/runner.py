@@ -20,6 +20,16 @@ class ScenarioResult(BaseModel):
     passed: bool
     attempts: int
     timeline: Timeline
+    blocked: bool = False
+
+    @property
+    def status(self) -> str:
+        if self.blocked:
+            return "BLOCKED"
+        return "PASSED" if self.passed else "FAILED"
+
+
+_PASSED, _FAILED, _BLOCKED = "passed", "failed", "blocked"
 
 
 def _do_install(driver: DeviceDriver, step: StepSpec, ctx: RunContext) -> None:
@@ -142,12 +152,14 @@ def _run_once(
     ctx: RunContext,
     timeline: Timeline,
     sleep: Callable[[float], None] = time.sleep,
-) -> bool:
+    blocked_errors: tuple[type[BaseException], ...] = (),
+) -> str:
     collector = EvidenceCollector(driver, ctx.evidence_dir)
     for index, step in enumerate(spec.steps):
         step_id = f"{index}:{step.action}"
         error: str | None = None
         passed = True
+        blocked = False
         assertion_results: list[AssertionResult] = []
 
         start = time.perf_counter()
@@ -159,6 +171,10 @@ def _run_once(
         except VerdictError as exc:
             passed = False
             error = str(exc)
+        except blocked_errors as exc:
+            passed = False
+            blocked = True
+            error = f"BLOCKED: the device connection failed: {type(exc).__name__}: {exc}"
         else:
             if result is not None:
                 assertion_results.append(result)
@@ -168,8 +184,9 @@ def _run_once(
         finally:
             ctx.last_action_duration_ms = (time.perf_counter() - start) * 1000
 
-        evidence_refs = collector.capture_all(spec.evidence.always, index)
-        if not passed:
+        # With the connection down, an evidence capture fails too.
+        evidence_refs = [] if blocked else collector.capture_all(spec.evidence.always, index)
+        if not passed and not blocked:
             evidence_refs += collector.capture_all(spec.evidence.on_failure, index)
 
         timeline.events.append(
@@ -184,10 +201,12 @@ def _run_once(
             )
         )
 
+        if blocked:
+            return _BLOCKED
         if not passed:
-            return False
+            return _FAILED
 
-    return True
+    return _PASSED
 
 
 def run_scenario(
@@ -197,16 +216,19 @@ def run_scenario(
     run_id: str | None = None,
     evidence_dir: Path | None = None,
     sleep: Callable[[float], None] = time.sleep,
+    blocked_errors: tuple[type[BaseException], ...] = (),
 ) -> ScenarioResult:
     """Execute a parsed scenario against `driver`, retrying the whole
     scenario up to `spec.retries.max_attempts` times on failure.
+
+    An exception in `blocked_errors` (a lost device connection) stops the run
+    with no retry. The result is BLOCKED and keeps the partial timeline.
     """
     resolved_run_id = run_id or str(uuid.uuid4())
     resolved_evidence_dir = evidence_dir or Path(f"/tmp/verdict-evidence-{resolved_run_id}")
 
     max_attempts = max(1, spec.retries.max_attempts)
     timeline = Timeline(run_id=resolved_run_id, scenario_name=spec.name)
-    passed = False
 
     for attempt in range(1, max_attempts + 1):
         ctx = RunContext(
@@ -218,9 +240,11 @@ def run_scenario(
             evidence_dir=resolved_evidence_dir,
         )
         timeline = Timeline(run_id=resolved_run_id, scenario_name=spec.name)
-        passed = _run_once(spec, driver, ctx, timeline, sleep)
-        if passed:
+        outcome = _run_once(spec, driver, ctx, timeline, sleep, blocked_errors)
+        if outcome == _PASSED:
             return ScenarioResult(passed=True, attempts=attempt, timeline=timeline)
+        if outcome == _BLOCKED:
+            return ScenarioResult(passed=False, blocked=True, attempts=attempt, timeline=timeline)
         if attempt < max_attempts and spec.retries.backoff_ms:
             sleep(spec.retries.backoff_ms / 1000)
 

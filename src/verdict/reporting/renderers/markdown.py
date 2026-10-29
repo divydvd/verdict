@@ -32,7 +32,7 @@ class MarkdownRenderer:
         lines = [
             f"# Scenario: {timeline.scenario_name}",
             "",
-            f"**Result:** {'PASSED' if result.passed else 'FAILED'}",
+            f"**Result:** {result.status}",
             f"**Attempts:** {result.attempts}",
             f"**Run ID:** {timeline.run_id}",
             "",

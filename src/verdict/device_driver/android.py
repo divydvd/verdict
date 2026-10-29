@@ -161,6 +161,7 @@ class AndroidUiautomator2Driver:
             pause_s=self.dump_retry_ms / 1000,
             sleep=self.sleep,
             retry_on=(u2.exceptions.BaseException,),
+            raise_as_is=CONNECTION_ERRORS,
         )
 
     def wait_for(self, selector: Selector, timeout_ms: int) -> bool:

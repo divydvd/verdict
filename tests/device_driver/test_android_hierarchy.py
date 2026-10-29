@@ -168,3 +168,35 @@ def test_ime_and_app_lookups_work_on_a_multi_window_dump():
 
     assert KeyboardVisibleAssertion().check(ctx).passed
     assert TextInsertedAssertion("helllo").check(ctx).passed
+
+
+class _DroppedU2Device:
+    """A u2 device whose server connection is lost: every dump fails."""
+
+    class _Adb:
+        def shell(self, command: str) -> str:
+            return ""
+
+    adb_device = _Adb()
+
+    def stop_uiautomator(self, wait: bool = True) -> None:
+        pass
+
+    def start_uiautomator(self) -> None:
+        pass
+
+    def dump_hierarchy(self) -> str:
+        import uiautomator2 as u2
+
+        raise u2.exceptions.HTTPError("connection lost")
+
+
+def test_android_dump_keeps_a_connection_error_after_the_retries(monkeypatch, tmp_path):
+    import uiautomator2 as u2
+
+    import verdict.device_driver.android as android_module
+
+    monkeypatch.setattr(android_module.u2, "connect", lambda *args: _DroppedU2Device())
+    driver = android_module.AndroidUiautomator2Driver(evidence_dir=tmp_path, sleep=lambda _: None)
+    with pytest.raises(u2.exceptions.HTTPError):
+        driver.dump_hierarchy()
