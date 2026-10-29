@@ -109,3 +109,62 @@ def test_dump_with_retry_does_not_hide_unexpected_errors():
         dump_with_retry(
             _dumper([KeyError("bug")]), attempts=3, pause_s=0, sleep=lambda _: None, retry_on=(_Transient,)
         )
+
+
+# The shape of a real uiautomator2 dump: one top-level node for each window.
+# The IME window is last, so a parser that keeps only the first window (the
+# status bar) cannot find the keyboard or the app's text field.
+MULTI_WINDOW_XML = """<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
+<hierarchy rotation="0">
+  <node index="0" text="" resource-id="" class="android.widget.FrameLayout"
+        package="com.android.systemui" content-desc="" bounds="[0,0][1080,80]">
+    <node index="0" text="" resource-id="com.android.systemui:id/status_bar"
+          class="android.widget.FrameLayout" content-desc="" bounds="[0,0][1080,80]" />
+  </node>
+  <node index="0" text="" resource-id="" class="android.widget.FrameLayout"
+        package="bha.keys.smartype.debug" content-desc="" bounds="[0,0][1080,2340]">
+    <node index="0" text="helllo" resource-id="text_field" class="android.widget.EditText"
+          content-desc="" bounds="[40,400][1040,520]" />
+  </node>
+  <node index="0" text="" resource-id="" class="android.widget.FrameLayout"
+        package="com.android.systemui" content-desc="" bounds="[0,2205][1080,2340]" />
+  <node index="0" text="" resource-id="" class="android.widget.FrameLayout"
+        package="bha.keys.smartype.debug" content-desc="" bounds="[0,1301][1080,2340]">
+    <node index="0" text="" resource-id="keyboard_view" class="android.view.View"
+          content-desc="" bounds="[0,1301][1080,2205]" />
+  </node>
+</hierarchy>
+"""
+
+
+def test_parse_hierarchy_xml_keeps_every_window():
+    root = parse_hierarchy_xml(MULTI_WINDOW_XML)
+
+    assert root is not None
+    assert root.class_name == "hierarchy"
+    assert root.resource_id is None and root.bounds is None
+    assert [window.bounds for window in root.children] == [
+        (0, 0, 1080, 80),
+        (0, 0, 1080, 2340),
+        (0, 2205, 1080, 2340),
+        (0, 1301, 1080, 2340),
+    ]
+
+
+def test_ime_and_app_lookups_work_on_a_multi_window_dump():
+    from verdict.core.models import RunContext
+    from verdict.device_driver.fake import FakeDeviceDriver
+    from verdict.domains.ime.assertions import KeyboardVisibleAssertion, TextInsertedAssertion
+
+    driver = FakeDeviceDriver()
+    driver.set_hierarchy(parse_hierarchy_xml(MULTI_WINDOW_XML))
+    ctx = RunContext(
+        session_id="s1",
+        run_id="r1",
+        scenario_name="scenario",
+        driver=driver,
+        evidence_dir=driver.evidence_dir,
+    )
+
+    assert KeyboardVisibleAssertion().check(ctx).passed
+    assert TextInsertedAssertion("helllo").check(ctx).passed

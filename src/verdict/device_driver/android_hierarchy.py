@@ -33,12 +33,17 @@ def _node_from_element(element: ET.Element) -> UiNode:
 def parse_hierarchy_xml(raw_xml: str) -> UiNode | None:
     """Parse a `uiautomator dump`-style hierarchy XML (`<hierarchy><node.../></hierarchy>`)
     into a `UiNode` tree. Returns None if the hierarchy has no root node.
+
+    A real uiautomator2 dump has one top-level node for each window (status bar,
+    app, navigation bar, IME). With more than one window, all of them go under a
+    synthetic root with no attributes, so a lookup searches every window.
     """
-    hierarchy_element = ET.fromstring(raw_xml)
-    root_element = next(iter(hierarchy_element), None)
-    if root_element is None:
+    windows = [_node_from_element(element) for element in ET.fromstring(raw_xml)]
+    if not windows:
         return None
-    return _node_from_element(root_element)
+    if len(windows) == 1:
+        return windows[0]
+    return UiNode(class_name="hierarchy", children=windows)
 
 
 def dump_with_retry(
