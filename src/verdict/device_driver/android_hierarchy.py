@@ -53,11 +53,14 @@ def dump_with_retry(
     pause_s: float,
     sleep: Callable[[float], None],
     retry_on: tuple[type[Exception], ...],
+    raise_as_is: tuple[type[BaseException], ...] = (),
 ) -> UiHierarchy:
     """Dump and parse the hierarchy. Right after a fast Compose transition the
     dump can fail or come back with no root node. Pause `pause_s` and dump
     again, up to `attempts` dumps in total. Raises `DriverError` when every
     dump fails; returns the last empty hierarchy when every dump is empty.
+    When the last error is in `raise_as_is` (a lost connection), raise it as it
+    is, so that the caller can report BLOCKED.
     """
     retryable: tuple[type[Exception], ...] = (ET.ParseError, *retry_on)
     last_error: Exception | None = None
@@ -75,4 +78,8 @@ def dump_with_retry(
             return hierarchy
     if hierarchy is not None:
         return hierarchy
-    raise DriverError(f"hierarchy dump failed after {max(1, attempts)} attempt(s): {last_error}")
+    if raise_as_is and isinstance(last_error, raise_as_is):
+        raise last_error
+    raise DriverError(
+        f"hierarchy dump failed after {max(1, attempts)} attempt(s): {last_error}"
+    ) from last_error

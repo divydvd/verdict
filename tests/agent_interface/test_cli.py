@@ -243,3 +243,60 @@ def test_restore_command_blocks_when_adb_fails_in_the_preflight(tmp_path, monkey
     )
     assert result.exit_code == 2, result.output
     assert "BLOCKED: the preflight check failed" in result.output
+
+
+def test_run_command_reports_blocked_when_the_device_connection_drops(tmp_path, monkeypatch):
+    # verdict#10: a dead uiautomator2 server gives RemoteDisconnected.
+    import http.client
+
+    class _DroppingDriver(FakeDeviceDriver):
+        def wait_for(self, selector, timeout_ms=5000):
+            raise http.client.RemoteDisconnected("Remote end closed connection without response")
+
+    scenario_path = _write_scenario(
+        tmp_path,
+        steps=[{"action": "wait_for", "selector": {"description": "x"}, "timeout_ms": 10}],
+    )
+    monkeypatch.setattr(cli, "AndroidUiautomator2Driver", lambda serial=None: _DroppingDriver())
+
+    result = CliRunner().invoke(cli.main, ["run", str(scenario_path), "--output-dir", str(tmp_path / "out")])
+
+    assert result.exit_code == 2
+    assert "BLOCKED" in result.output
+    assert "RemoteDisconnected" in result.output
+    assert not isinstance(result.exception, http.client.RemoteDisconnected)
+
+
+def test_run_command_writes_the_report_when_a_hierarchy_assertion_is_blocked(tmp_path, monkeypatch):
+    # A lost connection during the dump of a hierarchy assertion is BLOCKED, and
+    # the report keeps the steps that ran before it.
+    import json
+
+    import uiautomator2 as u2
+
+    class _DroppingDriver(FakeDeviceDriver):
+        def dump_hierarchy(self):
+            raise u2.exceptions.HTTPError("connection lost")
+
+    driver = _DroppingDriver()
+    driver.set_hierarchy(UiNode(resource_id="text_field"))
+    scenario_path = _write_scenario(
+        tmp_path,
+        steps=[
+            {"action": "launch", "package": "bha.keys.smartype.debug"},
+            {"action": "assert", "assertion": "keyboard_visible"},
+        ],
+    )
+    monkeypatch.setattr(cli, "AndroidUiautomator2Driver", lambda serial=None: driver)
+    out = tmp_path / "out"
+
+    result = CliRunner().invoke(cli.main, ["run", str(scenario_path), "--output-dir", str(out)])
+
+    assert result.exit_code == 2, result.output
+    assert "cli-scenario: BLOCKED (1 attempt(s))" in result.output
+    report = json.loads((out / "report.json").read_text())
+    assert report["blocked"] is True
+    events = report["timeline"]["events"]
+    assert [event["passed"] for event in events] == [True, False]
+    assert events[1]["error"].startswith("BLOCKED: the device connection failed: HTTPError")
+    assert "**Result:** BLOCKED" in (out / "report.md").read_text()

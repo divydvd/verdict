@@ -14,7 +14,7 @@
 <body>
 <h1>Scenario: {{ timeline.scenario_name }}</h1>
 <p>
-  <strong>Result:</strong> <span class="{{ 'pass' if result.passed else 'fail' }}">{{ 'PASSED' if result.passed else 'FAILED' }}</span><br>
+  <strong>Result:</strong> <span class="{{ 'pass' if result.passed else 'fail' }}">{{ result.status }}</span><br>
   <strong>Attempts:</strong> {{ result.attempts }}<br>
   <strong>Run ID:</strong> {{ timeline.run_id }}
 </p>

@@ -13,7 +13,7 @@ import click
 # has to happen somewhere above it -- the CLI entry point is that place.
 import verdict.domains.ime  # noqa: F401
 from verdict.core.exceptions import VerdictError
-from verdict.device_driver.android import AndroidUiautomator2Driver
+from verdict.device_driver.android import CONNECTION_ERRORS, AndroidUiautomator2Driver
 from verdict.device_driver.base import DeviceDriver
 from verdict.device_state.adb import Adb, AdbError, SubprocessAdb
 from verdict.device_state.baseline import (
@@ -55,7 +55,9 @@ def execute_run(
     """
     spec = parse_scenario(scenario_path, variables)
     driver = driver_factory(device)
-    result = run_scenario(spec, driver, session_id=str(uuid.uuid4()))
+    result = run_scenario(
+        spec, driver, session_id=str(uuid.uuid4()), blocked_errors=CONNECTION_ERRORS
+    )
     ReportGenerator(output_dir).generate(result, formats=formats)
     return result
 
@@ -106,7 +108,11 @@ def run(
     output_dir: Path,
     formats: str,
 ) -> None:
-    """Run SCENARIO_PATH against a connected Android device/emulator."""
+    """Run SCENARIO_PATH against a connected Android device/emulator.
+
+    Exit 0: PASSED. Exit 1: FAILED. Exit 2: BLOCKED, the device connection
+    failed. The report keeps the steps before the BLOCKED step.
+    """
     var_dict = dict(_parse_variable(v) for v in variables)
     format_tuple = tuple(f.strip() for f in formats.split(",") if f.strip())
 
@@ -114,10 +120,15 @@ def run(
         result = execute_run(scenario_path, var_dict, output_dir, format_tuple, device)
     except VerdictError as exc:
         raise click.ClickException(str(exc)) from exc
+    except CONNECTION_ERRORS as exc:
+        click.echo(f"BLOCKED: the device connection failed: {type(exc).__name__}: {exc}", err=True)
+        raise SystemExit(2) from exc
 
-    status = "PASSED" if result.passed else "FAILED"
-    click.echo(f"{result.timeline.scenario_name}: {status} ({result.attempts} attempt(s))")
+    click.echo(f"{result.timeline.scenario_name}: {result.status} ({result.attempts} attempt(s))")
     click.echo(f"Report written to {output_dir}")
+    if result.blocked:
+        click.echo(f"BLOCKED: {result.timeline.events[-1].error}", err=True)
+        raise SystemExit(2)
     if not result.passed:
         raise SystemExit(1)
 
