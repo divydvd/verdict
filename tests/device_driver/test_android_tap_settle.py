@@ -7,7 +7,7 @@ from verdict.device_driver.android import AndroidUiautomator2Driver
 
 
 class _FakeObject:
-    def __init__(self, log: list[object], bounds: list[dict[str, int]]) -> None:
+    def __init__(self, log: list[object], bounds: list[dict[str, int] | None]) -> None:
         self.log = log
         self.bounds = bounds
         self.missing_reads = 0
@@ -23,6 +23,8 @@ class _FakeObject:
     @property
     def info(self) -> dict[str, object]:
         value = self.bounds.pop(0) if len(self.bounds) > 1 else self.bounds[0]
+        if value is None:
+            raise android_module.u2.exceptions.UiObjectNotFoundError(-32002, "not found")
         return {"bounds": value}
 
     def click(self) -> None:
@@ -35,7 +37,7 @@ class _FakeAdb:
 
 
 class _FakeU2Device:
-    def __init__(self, log: list[object], bounds: list[dict[str, int]]) -> None:
+    def __init__(self, log: list[object], bounds: list[dict[str, int] | None]) -> None:
         self.adb_device = _FakeAdb()
         self.log = log
         self.obj = _FakeObject(log, bounds)
@@ -60,7 +62,7 @@ def _bounds(top: int) -> dict[str, int]:
 
 @pytest.fixture
 def make_driver(monkeypatch, tmp_path):
-    def make(bounds: list[dict[str, int]]) -> tuple[AndroidUiautomator2Driver, list[object]]:
+    def make(bounds: list[dict[str, int] | None]) -> tuple[AndroidUiautomator2Driver, list[object]]:
         log: list[object] = []
         monkeypatch.setattr(android_module.u2, "connect", lambda *args: _FakeU2Device(log, bounds))
         driver = AndroidUiautomator2Driver(evidence_dir=tmp_path, sleep=lambda s: log.append(s))
@@ -111,3 +113,9 @@ def test_tap_fails_after_the_wait_limit(make_driver):
         driver.tap_selector(FIELD)
     assert log.count(0.25) == driver.tap_wait_ms // driver.dump_retry_ms
     assert "click" not in log
+
+
+def test_settle_continues_when_the_element_is_missing_for_a_moment(make_driver):
+    driver, log = make_driver([_bounds(2400), None, _bounds(2103), _bounds(2103)])
+    driver.tap_selector(FIELD)
+    assert log == [1.5, 0.25, 0.25, 0.25, "click"]

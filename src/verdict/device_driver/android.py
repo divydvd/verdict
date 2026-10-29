@@ -108,16 +108,21 @@ class AndroidUiautomator2Driver:
         # then the field does not get focus. Wait, then wait until the element
         # bounds stop moving.
         self.sleep(self.tap_settle_ms / 1000)
+        last = self._bounds_or_none(obj)
+        for _ in range(self.tap_settle_checks):
+            self.sleep(self.dump_retry_ms / 1000)
+            bounds = self._bounds_or_none(obj)
+            if bounds is not None and bounds == last:
+                return
+            last = bounds
+
+    @staticmethod
+    def _bounds_or_none(obj: Any) -> Any:
+        # A missing element during the transition is not a still element.
         try:
-            last = obj.info.get("bounds")
-            for _ in range(self.tap_settle_checks):
-                self.sleep(self.dump_retry_ms / 1000)
-                bounds = obj.info.get("bounds")
-                if bounds == last:
-                    return
-                last = bounds
+            return obj.info.get("bounds")
         except u2.exceptions.UiObjectNotFoundError:
-            return
+            return None
 
     def swipe(self, x1: int, y1: int, x2: int, y2: int, duration_ms: int = 300) -> None:
         self._device.swipe(x1, y1, x2, y2, duration=duration_ms / 1000)
