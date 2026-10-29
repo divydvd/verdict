@@ -89,6 +89,8 @@ class UiNode(BaseModel):
     content_desc: str | None = None
     class_name: str | None = None
     bounds: tuple[int, int, int, int] | None = None
+    checkable: bool = False
+    checked: bool = False
     children: list[UiNode] = Field(default_factory=list)
 
     def matches(self, selector: Selector) -> bool:
@@ -106,6 +108,21 @@ class UiNode(BaseModel):
         for child in self.children:
             matches.extend(child.find_all(selector))
         return matches
+
+    def find_checkable(self, selector: Selector) -> tuple[UiNode | None, UiNode | None]:
+        """Return the first node that matches `selector`, and the checkable node
+        for it: the node itself or its nearest checkable ancestor. A Compose
+        row with `Modifier.toggleable` can hold the matched text as a child.
+        """
+        if self.matches(selector):
+            return self, self if self.checkable else None
+        for child in self.children:
+            found, checkable = child.find_checkable(selector)
+            if found is not None:
+                if checkable is None and self.checkable:
+                    checkable = self
+                return found, checkable
+        return None, None
 
     def find(self, selector: Selector) -> UiNode | None:
         if self.matches(selector):
@@ -128,6 +145,11 @@ class UiHierarchy(BaseModel):
         if self.root is None:
             return None
         return self.root.find(selector)
+
+    def find_checkable(self, selector: Selector) -> tuple[UiNode | None, UiNode | None]:
+        if self.root is None:
+            return None, None
+        return self.root.find_checkable(selector)
 
     def find_all(self, selector: Selector) -> list[UiNode]:
         if self.root is None:
