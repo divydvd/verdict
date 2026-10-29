@@ -187,6 +187,7 @@ class FakePhone:
             raise AdbError("INSTALL_FAILED_VERSION_DOWNGRADE")
         self.packages[TARGET] = self.builds[data]
         self.apk_bytes = data
+        self.apk_paths = ["/data/app/~~y/base.apk"]  # a single-APK install replaces any split
 
     def uninstall(self, package: str) -> None:
         self.commands.append(f"uninstall {package}")
