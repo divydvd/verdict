@@ -63,10 +63,13 @@ class AndroidUiautomator2Driver:
     sleep: Callable[[float], None] = field(default=time.sleep, repr=False)
     dump_attempts: int = 3
     dump_retry_ms: int = 250
+    tap_settle_ms: int = 1500
+    tap_settle_checks: int = 8
 
     _device: u2.Device = field(init=False, repr=False)
     _adb: adbutils.AdbDevice = field(init=False, repr=False)
     _active_recording: tuple[RecordingHandle, Path] | None = field(default=None, init=False, repr=False)
+    _settle_before_tap: bool = field(default=True, init=False, repr=False)
 
     def __post_init__(self) -> None:
         self._device = u2.connect(self.serial) if self.serial else u2.connect()
@@ -84,7 +87,27 @@ class AndroidUiautomator2Driver:
         obj = self._ui_object(selector)
         if not obj.exists:
             raise ElementNotFoundError(f"No element matching {selector!r}")
+        if self._settle_before_tap:
+            self._wait_until_still(obj)
+            self._settle_before_tap = False
         obj.click()
+
+    def _wait_until_still(self, obj: Any) -> None:
+        # The first tap after a launch can land during the screen transition
+        # (the phone logs "QueryController: Could not detect idle state"), and
+        # then the field does not get focus. Wait, then wait until the element
+        # bounds stop moving.
+        self.sleep(self.tap_settle_ms / 1000)
+        try:
+            last = obj.info.get("bounds")
+            for _ in range(self.tap_settle_checks):
+                self.sleep(self.dump_retry_ms / 1000)
+                bounds = obj.info.get("bounds")
+                if bounds == last:
+                    return
+                last = bounds
+        except u2.exceptions.UiObjectNotFoundError:
+            return
 
     def swipe(self, x1: int, y1: int, x2: int, y2: int, duration_ms: int = 300) -> None:
         self._device.swipe(x1, y1, x2, y2, duration=duration_ms / 1000)
@@ -151,6 +174,7 @@ class AndroidUiautomator2Driver:
 
     def launch(self, package: str, activity: str | None = None) -> None:
         self._device.app_start(package, activity)
+        self._settle_before_tap = True
 
     def clear_data(self, package: str) -> None:
         self._adb.app_clear(package)
