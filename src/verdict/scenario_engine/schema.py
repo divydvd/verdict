@@ -22,6 +22,7 @@ _REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
     "scroll": ("direction",),
     "press_key": ("key",),
     "wait_for": ("selector",),
+    "ensure_checked": ("selector", "checked"),
     "assert": ("assertion",),
 }
 
@@ -61,6 +62,8 @@ class StepSpec(BaseModel):
     direction: Direction | None = None
     # A named KeyEvent ("enter") or any platform key code (18, "KEYCODE_POUND").
     key: Annotated[KeyInput, BeforeValidator(normalize_key)] | None = None
+    # `ensure_checked` only: the wanted state of a switch or a check box.
+    checked: bool | None = None
 
     @model_validator(mode="after")
     def _validate_required_fields(self) -> StepSpec:

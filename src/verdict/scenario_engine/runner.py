@@ -9,7 +9,7 @@ from pathlib import Path
 from pydantic import BaseModel
 
 from verdict.assertions.base import assertion_registry
-from verdict.core.exceptions import VerdictError
+from verdict.core.exceptions import DriverError, ElementNotFoundError, VerdictError
 from verdict.core.models import AssertionResult, RunContext, Timeline, TimelineEvent
 from verdict.device_driver.base import DeviceDriver
 from verdict.evidence.collector import EvidenceCollector
@@ -79,6 +79,40 @@ def _do_wait_for(driver: DeviceDriver, step: StepSpec, ctx: RunContext) -> Asser
     return AssertionResult(passed=ok, message=message if ok else f"timed out: {message}")
 
 
+def _read_checked(driver: DeviceDriver, step: StepSpec) -> bool:
+    assert step.selector is not None
+    found, checkable = driver.dump_hierarchy().find_checkable(step.selector)
+    if found is None:
+        raise ElementNotFoundError(f"ensure_checked: no element matching {step.selector!r}")
+    if checkable is None:
+        raise DriverError(
+            f"ensure_checked: the element matching {step.selector!r} is not checkable, "
+            "and it has no checkable ancestor"
+        )
+    return checkable.checked
+
+
+def _do_ensure_checked(driver: DeviceDriver, step: StepSpec, ctx: RunContext) -> AssertionResult:
+    """Set a switch or a check box to `step.checked`. Tap only when the state
+    differs, then read the state again (with the `settle_ms` re-checks).
+    """
+    assert step.checked is not None
+    wanted = step.checked
+    if _read_checked(driver, step) == wanted:
+        return AssertionResult(passed=True, message=f"ensure_checked {step.selector!r}: already {wanted}")
+    assert step.selector is not None
+    driver.tap_selector(step.selector)
+    for attempt in range(step.settle_attempts + 1):
+        if attempt:
+            time.sleep(step.settle_ms / 1000)
+        if _read_checked(driver, step) == wanted:
+            return AssertionResult(passed=True, message=f"ensure_checked {step.selector!r}: tapped, now {wanted}")
+    return AssertionResult(
+        passed=False,
+        message=f"ensure_checked {step.selector!r}: tapped, but the state is still {not wanted}",
+    )
+
+
 def _do_assert(driver: DeviceDriver, step: StepSpec, ctx: RunContext) -> AssertionResult:
     assert step.assertion is not None
     assertion = assertion_registry.get(step.assertion, **step.args)
@@ -97,6 +131,7 @@ _ACTIONS: dict[str, Callable[[DeviceDriver, StepSpec, RunContext], AssertionResu
     "scroll": _do_scroll,
     "press_key": _do_press_key,
     "wait_for": _do_wait_for,
+    "ensure_checked": _do_ensure_checked,
     "assert": _do_assert,
 }
 

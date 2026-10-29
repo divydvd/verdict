@@ -381,7 +381,19 @@ class DeviceDriver(InputDriver, AppLifecycleDriver, DiagnosticsDriver, Protocol)
   `assert` step is re-checked after a short settle (`settle_ms`, `settle_attempts`), because the
   hierarchy can lag a fast UI transition; the message records the re-checks.
 - `actions/` — built-in reusable step types (`tap`, `type_text`, `type_keys`, `swipe`, `wait_for`,
-  `maestro_flow`) — IME-specific actions live in `domains/ime/actions.py`, not here.
+  `ensure_checked`, `maestro_flow`) — IME-specific actions live in `domains/ime/actions.py`, not here.
+- `ensure_checked` sets a switch or a check box to a known state:
+
+  ```yaml
+  - action: ensure_checked
+    selector: {text: "Auto-correct"}
+    checked: true
+  ```
+
+  The runner reads the `checked` attribute of the matched node, or of its nearest checkable
+  ancestor (a Compose `Modifier.toggleable` row holds the title text as a child). It taps only
+  when the state differs, then reads the state again with the `settle_ms` re-checks. The step
+  fails when the state does not change, or when no matched node or ancestor is checkable.
 
 ### 6.3 Assertion Library (`assertions/`) + `domains/ime/`
 

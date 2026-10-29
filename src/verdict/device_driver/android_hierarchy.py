@@ -26,6 +26,8 @@ def _node_from_element(element: ET.Element) -> UiNode:
         content_desc=attrib.get("content-desc") or None,
         class_name=attrib.get("class") or None,
         bounds=_parse_bounds(attrib.get("bounds", "")),
+        checkable=attrib.get("checkable") == "true",
+        checked=attrib.get("checked") == "true",
         children=[_node_from_element(child) for child in element],
     )
 
