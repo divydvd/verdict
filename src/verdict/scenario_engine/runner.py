@@ -92,9 +92,16 @@ def _read_checked(driver: DeviceDriver, step: StepSpec) -> bool:
     return checkable.checked
 
 
-def _do_ensure_checked(driver: DeviceDriver, step: StepSpec, ctx: RunContext) -> AssertionResult:
+def _do_ensure_checked(
+    driver: DeviceDriver,
+    step: StepSpec,
+    ctx: RunContext,
+    sleep: Callable[[float], None] = time.sleep,
+) -> AssertionResult:
     """Set a switch or a check box to `step.checked`. Tap only when the state
     differs, then read the state again (with the `settle_ms` re-checks).
+    After the tap, a missing element is a re-check, not a failure: the screen
+    can redraw.
     """
     assert step.checked is not None
     wanted = step.checked
@@ -102,14 +109,21 @@ def _do_ensure_checked(driver: DeviceDriver, step: StepSpec, ctx: RunContext) ->
         return AssertionResult(passed=True, message=f"ensure_checked {step.selector!r}: already {wanted}")
     assert step.selector is not None
     driver.tap_selector(step.selector)
+    state = f"the state is still {not wanted}"
     for attempt in range(step.settle_attempts + 1):
         if attempt:
-            time.sleep(step.settle_ms / 1000)
-        if _read_checked(driver, step) == wanted:
-            return AssertionResult(passed=True, message=f"ensure_checked {step.selector!r}: tapped, now {wanted}")
+            sleep(step.settle_ms / 1000)
+        try:
+            if _read_checked(driver, step) == wanted:
+                return AssertionResult(
+                    passed=True, message=f"ensure_checked {step.selector!r}: tapped, now {wanted}"
+                )
+            state = f"the state is still {not wanted}"
+        except ElementNotFoundError:
+            state = "the element is missing"
     return AssertionResult(
         passed=False,
-        message=f"ensure_checked {step.selector!r}: tapped, but the state is still {not wanted}",
+        message=f"ensure_checked {step.selector!r}: tapped, but {state}",
     )
 
 
@@ -188,7 +202,11 @@ def _run_once(
         start = time.perf_counter()
         try:
             action_fn = _ACTIONS[step.action]
-            result = action_fn(driver, step, ctx)
+            result: AssertionResult | None
+            if action_fn is _do_ensure_checked:
+                result = _do_ensure_checked(driver, step, ctx, sleep)
+            else:
+                result = action_fn(driver, step, ctx)
             if step.action == "assert" and result is not None and not result.passed:
                 result = _settle_and_recheck(driver, step, ctx, result, sleep)
         except VerdictError as exc:

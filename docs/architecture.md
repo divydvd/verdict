@@ -392,8 +392,9 @@ class DeviceDriver(InputDriver, AppLifecycleDriver, DiagnosticsDriver, Protocol)
 
   The runner reads the `checked` attribute of the matched node, or of its nearest checkable
   ancestor (a Compose `Modifier.toggleable` row holds the title text as a child). It taps only
-  when the state differs, then reads the state again with the `settle_ms` re-checks. The step
-  fails when the state does not change, or when no matched node or ancestor is checkable.
+  when the state differs, then reads the state again with the `settle_ms` re-checks. After the
+  tap, a missing node is read again in the same re-checks, because the screen can redraw. The
+  step fails when the state does not change, or when no matched node or ancestor is checkable.
 
 ### 6.3 Assertion Library (`assertions/`) + `domains/ime/`
 
