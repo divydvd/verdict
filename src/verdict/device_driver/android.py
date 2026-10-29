@@ -65,6 +65,7 @@ class AndroidUiautomator2Driver:
     dump_retry_ms: int = 250
     tap_settle_ms: int = 1500
     tap_settle_checks: int = 8
+    tap_wait_ms: int = 5000
 
     _device: u2.Device = field(init=False, repr=False)
     _adb: adbutils.AdbDevice = field(init=False, repr=False)
@@ -85,12 +86,21 @@ class AndroidUiautomator2Driver:
 
     def tap_selector(self, selector: Selector) -> None:
         obj = self._ui_object(selector)
-        if not obj.exists:
+        if not self._wait_until_exists(obj):
             raise ElementNotFoundError(f"No element matching {selector!r}")
         if self._settle_before_tap:
             self._wait_until_still(obj)
             self._settle_before_tap = False
         obj.click()
+
+    def _wait_until_exists(self, obj: Any) -> bool:
+        # After a cold deep-link start, the app can make its task again, and
+        # the element is missing for 1-2 s. Read again until tap_wait_ms ends.
+        for _ in range(max(1, self.tap_wait_ms // self.dump_retry_ms)):
+            if obj.exists:
+                return True
+            self.sleep(self.dump_retry_ms / 1000)
+        return bool(obj.exists)
 
     def _wait_until_still(self, obj: Any) -> None:
         # The first tap after a launch can land during the screen transition

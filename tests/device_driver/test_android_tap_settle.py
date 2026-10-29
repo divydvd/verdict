@@ -1,6 +1,7 @@
 import pytest
 
 import verdict.device_driver.android as android_module
+from verdict.core.exceptions import ElementNotFoundError
 from verdict.core.models import Selector
 from verdict.device_driver.android import AndroidUiautomator2Driver
 
@@ -9,7 +10,15 @@ class _FakeObject:
     def __init__(self, log: list[object], bounds: list[dict[str, int]]) -> None:
         self.log = log
         self.bounds = bounds
-        self.exists = True
+        self.missing_reads = 0
+
+    @property
+    def exists(self) -> bool:
+        if self.missing_reads > 0:
+            self.missing_reads -= 1
+            self.log.append("missing")
+            return False
+        return True
 
     @property
     def info(self) -> dict[str, object]:
@@ -86,3 +95,19 @@ def test_settle_stops_after_the_check_limit(make_driver):
     driver, log = make_driver(moving)
     driver.tap_selector(FIELD)
     assert log == [1.5] + [0.25] * driver.tap_settle_checks + ["click"]
+
+
+def test_tap_waits_for_an_element_that_appears_late(make_driver):
+    driver, log = make_driver([_bounds(2103)])
+    driver._device.obj.missing_reads = 2
+    driver.tap_selector(FIELD)
+    assert log == ["missing", 0.25, "missing", 0.25, 1.5, 0.25, "click"]
+
+
+def test_tap_fails_after_the_wait_limit(make_driver):
+    driver, log = make_driver([_bounds(2103)])
+    driver._device.obj.missing_reads = 1000
+    with pytest.raises(ElementNotFoundError, match="No element matching"):
+        driver.tap_selector(FIELD)
+    assert log.count(0.25) == driver.tap_wait_ms // driver.dump_retry_ms
+    assert "click" not in log
