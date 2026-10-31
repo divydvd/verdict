@@ -36,6 +36,7 @@ import urllib.parse
 import urllib.request
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from typing import Any
 
 import pytest
@@ -58,12 +59,83 @@ _DEVICE_TOOL_NAMES = frozenset(
 )
 _DEVICE_TOOL_PREFIXES = ("idevice",)
 _EXECUTABLE_ONLY_NAMES = frozenset({"ios", "ios.exe"})
-_COMMAND_WRAPPERS = frozenset(
-    {"env", "sudo", "exec", "command", "nohup", "time", "nice", "xargs", "builtin"}
-)
+
+
+@dataclass(frozen=True)
+class _Wrapper:
+    # The options of a command that runs another command, such as env or sudo.
+    flags: str = ""
+    values: str = ""
+    optional_values: str = ""
+    long_flags: frozenset[str] = frozenset()
+    long_values: frozenset[str] = frozenset()
+    operands: int = 0
+
+
+# An option that is not in this table makes the guard fail closed. env -S is
+# not in the table, because its value is a second command line.
+_WRAPPERS = {
+    "env": _Wrapper(
+        flags="i0v",
+        values="uC",
+        long_flags=frozenset({"ignore-environment", "null", "debug"}),
+        long_values=frozenset({"unset", "chdir"}),
+    ),
+    "sudo": _Wrapper(
+        flags="AbEeHiKklnPSsVv",
+        values="CDgpRrTtUu",
+        long_flags=frozenset(
+            {
+                "askpass", "background", "bell", "edit", "login", "non-interactive",
+                "preserve-env", "preserve-groups", "remove-timestamp", "reset-timestamp",
+                "set-home", "shell", "stdin",
+            }
+        ),
+        long_values=frozenset(
+            {
+                "chdir", "chroot", "close-from", "command-timeout", "group", "other-user",
+                "prompt", "role", "type", "user",
+            }
+        ),
+    ),
+    "nice": _Wrapper(values="n", long_values=frozenset({"adjustment"})),
+    "timeout": _Wrapper(
+        flags="v",
+        values="ks",
+        long_flags=frozenset({"foreground", "preserve-status", "verbose"}),
+        long_values=frozenset({"kill-after", "signal"}),
+        operands=1,
+    ),
+    "xargs": _Wrapper(
+        flags="0oprtx",
+        values="adEILnPs",
+        optional_values="eil",
+        long_flags=frozenset(
+            {"eof", "exit", "interactive", "no-run-if-empty", "null", "open-tty", "replace",
+             "verbose", "max-lines"}
+        ),
+        long_values=frozenset(
+            {"arg-file", "delimiter", "max-args", "max-chars", "max-procs", "process-slot-var"}
+        ),
+    ),
+    "stdbuf": _Wrapper(values="ioe", long_values=frozenset({"input", "output", "error"})),
+    "time": _Wrapper(
+        flags="alpqv",
+        values="fo",
+        long_flags=frozenset({"append", "portability", "quiet", "verbose"}),
+        long_values=frozenset({"format", "output"}),
+    ),
+    "caffeinate": _Wrapper(flags="dimsu", values="tw"),
+    "exec": _Wrapper(flags="cl", values="a"),
+    "command": _Wrapper(flags="pVv"),
+    "nohup": _Wrapper(),
+    "builtin": _Wrapper(),
+    "setsid": _Wrapper(flags="cfw"),
+}
 _SHELLS = frozenset({"sh", "bash", "zsh", "dash", "ksh"})
 _SHELL_SEPARATORS = re.compile(r"[;|&()<>`\s]+")
 _SHELL_PUNCTUATION = ";&|()<>`\n"
+_SHELL_LONG_VALUES = frozenset({"rcfile", "init-file"})
 _REDIRECTIONS = frozenset({"<", ">", ">>", "<<", "<<<", "<>", ">&", "<&", "&>", ">|"})
 _ENV_ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 _LOOPBACK_NAMES = frozenset({"localhost", "localhost.localdomain", "ip6-localhost"})
@@ -124,6 +196,8 @@ def _command_tokens(command: Any) -> list[str]:
 def _shell_words(text: str) -> list[str]:
     lexer = shlex.shlex(text, posix=True, punctuation_chars=_SHELL_PUNCTUATION)
     lexer.whitespace_split = True
+    # A newline separates two commands, so it is an operator and not whitespace.
+    lexer.whitespace = " \t\r"
     lexer.commenters = ""
     try:
         return list(lexer)
@@ -131,35 +205,131 @@ def _shell_words(text: str) -> list[str]:
         return text.split()
 
 
+def _is_operator(word: str) -> bool:
+    return bool(word) and all(char in _SHELL_PUNCTUATION for char in word)
+
+
+def _operator_effect(word: str) -> tuple[bool, bool]:
+    # Return (starts a new command, the next word is a redirection target).
+    # shlex joins adjacent operators, for example ";>". Such a token starts a
+    # new command and also redirects. This fails closed.
+    if word in _REDIRECTIONS:
+        return False, True
+    redirects = ("<" in word or ">" in word) and "(" not in word
+    return True, redirects
+
+
+def _is_fd_prefix(word: str, words: list[str], index: int) -> bool:
+    # "2>/dev/null" splits into "2", ">", "/dev/null".
+    return (
+        (word.isdigit() or re.fullmatch(r"\{[A-Za-z_][A-Za-z0-9_]*\}", word) is not None)
+        and index < len(words)
+        and _is_operator(words[index])
+        and _operator_effect(words[index])[1]
+    )
+
+
+def _wrapped_command_start(wrapper: _Wrapper, words: list[str], index: int) -> int | None:
+    # Return the index of the wrapped command, or None if an option is unknown.
+    while index < len(words):
+        word = words[index]
+        if word == "--":
+            index += 1
+            break
+        if word == "-":
+            index += 1
+            continue
+        if _is_operator(word):
+            break
+        if word.startswith("--"):
+            option, has_value, _ = word[2:].partition("=")
+            if option in wrapper.long_values:
+                index += 1 if has_value else 2
+            elif option in wrapper.long_flags:
+                index += 1
+            else:
+                return None
+            continue
+        if word.startswith("-") and len(word) > 1:
+            if wrapper is _WRAPPERS["nice"] and word[1:].isdigit():
+                index += 1
+                continue
+            step = 1
+            for position, char in enumerate(word[1:], start=1):
+                if char in wrapper.optional_values:
+                    break
+                if char in wrapper.values:
+                    if position == len(word) - 1:
+                        step = 2
+                    break
+                if char not in wrapper.flags:
+                    return None
+            index += step
+            continue
+        break
+    return index + wrapper.operands
+
+
+def _shell_script(args: list[str]) -> str | None:
+    # Return the command string of "sh -c SCRIPT", also for groups such as -ec.
+    has_c = False
+    index = 0
+    while index < len(args):
+        word = args[index]
+        if word == "--":
+            index += 1
+            break
+        if len(word) < 2 or word[0] not in "-+":
+            break
+        if word.startswith("--"):
+            index += 2 if word[2:] in _SHELL_LONG_VALUES else 1
+            continue
+        group = word[1:]
+        if word[0] == "-" and "c" in group:
+            has_c = True
+        index += 2 if ("o" in group or "O" in group) else 1
+    if has_c and index < len(args):
+        return args[index]
+    return None
+
+
 def _executable_words(words: list[str]) -> Iterator[str]:
     # Yield each word that a shell runs as a program: the first word of every
-    # command, after environment assignments and wrappers such as env or sudo.
+    # command, after redirections, environment assignments, and wrappers such
+    # as env or sudo. If a wrapper option is unknown, yield all later words.
     at_start = True
-    after_redirection = False
-    after_wrapper = False
-    for index, word in enumerate(words):
-        if word and all(char in _SHELL_PUNCTUATION for char in word):
-            after_redirection = word in _REDIRECTIONS
-            if not after_redirection:
-                at_start, after_wrapper = True, False
+    index = 0
+    while index < len(words):
+        word = words[index]
+        index += 1
+        if _is_operator(word):
+            new_command, redirects = _operator_effect(word)
+            at_start = at_start or new_command
+            if redirects and index < len(words) and not _is_operator(words[index]):
+                index += 1
             continue
-        if after_redirection:
-            after_redirection = False
-            continue
-        if not at_start:
-            continue
-        if _ENV_ASSIGNMENT.match(word) or (after_wrapper and word.startswith("-")):
+        if not at_start or _is_fd_prefix(word, words, index) or _ENV_ASSIGNMENT.match(word):
             continue
         name = os.path.basename(word)
-        if name in _COMMAND_WRAPPERS:
-            after_wrapper = True
+        wrapper = _WRAPPERS.get(name)
+        if wrapper is not None:
+            start = _wrapped_command_start(wrapper, words, index)
+            if start is None:
+                yield from (
+                    token
+                    for later in words[index:]
+                    if not _is_operator(later)
+                    for token in _string_tokens(later)
+                )
+                return
+            index = start
             continue
         yield word
-        at_start, after_wrapper = False, False
+        at_start = False
         if name in _SHELLS:
-            rest = words[index + 1 :]
-            if "-c" in rest and rest.index("-c") + 1 < len(rest):
-                yield from _executable_words(_shell_words(rest[rest.index("-c") + 1]))
+            script = _shell_script(words[index:])
+            if script is not None:
+                yield from _executable_words(_shell_words(script))
 
 
 def _command_executables(command: Any) -> list[str]:

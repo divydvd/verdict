@@ -1,4 +1,5 @@
 import os
+import shlex
 import subprocess
 import sys
 import urllib.request
@@ -356,3 +357,78 @@ def test_doctor_ffmpeg_version_check_is_blocked(fake_ios_tools):
     with pytest.raises(RealDeviceAccessError, match="run ffmpeg without --run-device"):
         subprocess.run("echo start; /opt/homebrew/bin/ffmpeg -version", shell=True, check=False)
     assert list(fake_ios_tools.iterdir()) == []
+
+
+def _assert_ios_is_blocked(command, fake_ios_tools, **kwargs):
+    with pytest.raises(RealDeviceAccessError, match="run ios without --run-device"):
+        subprocess.run(command, check=False, capture_output=True, **kwargs)
+    assert list(fake_ios_tools.iterdir()) == []
+
+
+@pytest.mark.parametrize(
+    "command",
+    ["true\nios list", "echo start\n\nios list", "true;\nios list"],
+)
+def test_a_newline_separates_shell_commands(fake_ios_tools, command):
+    _assert_ios_is_blocked(command, fake_ios_tools, shell=True)
+    _assert_ios_is_blocked(["sh", "-c", command], fake_ios_tools)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        ["env", "-u", "VERDICT_GUARD_UNUSED", "ios", "list"],
+        ["env", "-iu", "NAME", "-C", "/tmp", "A=1", "ios", "list"],
+        ["env", "--unset", "NAME", "--chdir=/tmp", "ios", "list"],
+        ["env", "-", "ios", "list"],
+        ["sudo", "-u", "root", "-g", "wheel", "ios", "list"],
+        ["sudo", "-Eu", "root", "--", "ios", "list"],
+        ["nice", "-n", "5", "ios", "list"],
+        ["nice", "-10", "ios", "list"],
+        ["timeout", "-s", "KILL", "5", "ios", "list"],
+        ["timeout", "--kill-after", "1", "5", "ios", "list"],
+        ["xargs", "-n", "1", "-I", "{}", "ios", "list"],
+        ["stdbuf", "-o", "L", "ios", "list"],
+        ["exec", "-a", "name", "ios", "list"],
+        ["env", "-S", "ios list"],
+        ["sudo", "--unknown-option", "value", "ios", "list"],
+        ["timeout", "-z", "5", "ios", "list"],
+    ],
+)
+def test_wrapper_options_with_values_do_not_hide_the_executable(command):
+    assert "ios" in guard._command_executables(command)
+    assert "ios" in guard._command_executables(shlex.join(command))
+
+
+def test_wrapper_option_with_a_value_is_blocked(fake_ios_tools):
+    _assert_ios_is_blocked(["env", "-u", "VERDICT_GUARD_UNUSED", "ios", "list"], fake_ios_tools)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "2>/dev/null ios list",
+        "2>&1 ios list",
+        "true; >/dev/null ios list",
+        "true;>/dev/null ios list",
+        "{fd}>/dev/null ios list",
+        "</dev/null 2>/dev/null ios list",
+    ],
+)
+def test_a_numbered_redirection_before_the_command_is_blocked(fake_ios_tools, command):
+    _assert_ios_is_blocked(command, fake_ios_tools, shell=True)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        ["sh", "-ec", "ios list"],
+        ["sh", "-ce", "ios list"],
+        ["bash", "-xec", "ios list"],
+        ["bash", "-o", "pipefail", "-c", "ios list"],
+        ["bash", "--norc", "-ec", "ios list"],
+        ["sh", "-c", "-e", "ios list"],
+    ],
+)
+def test_combined_shell_options_with_c_are_blocked(fake_ios_tools, command):
+    _assert_ios_is_blocked(command, fake_ios_tools)
