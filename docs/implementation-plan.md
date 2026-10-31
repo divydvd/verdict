@@ -101,6 +101,21 @@ Goal: any MCP-compatible coding agent can drive the platform end-to-end.
 get a failure, call `analyze_failure`, and receive a coherent explanation — without any
 out-of-band documentation beyond the tool schemas themselves.
 
+## iOS driver track (current)
+
+The owner asked to start the iOS driver now. Thus it moves ahead of its Phase 4 slot
+([ADR-0009](adr/0009-ios-driver-appium-xcuitest.md)). This track runs in parallel with
+Phases 2-3. The unit tests use fakes and need no iPhone.
+
+| # | Milestone | Size | Depends on |
+|---|---|---|---|
+| I.1 | ADR-0009: iOS driver through Appium XCUITest | S | — |
+| I.2 | `IosAppiumDriver` (optional `[ios]` extra), XCUITest hierarchy parser, driver contract tests | M | I.1 |
+| I.3 | Selectors on iOS: field mapping, per-platform selector variants, scenario `platforms` field | M | I.2 |
+| I.4 | CLI `--platform` / `--appium-url`, `verdict doctor ios` | S | I.2 |
+| I.5 | Test guard: block iOS device tools without `--run-device` | S | I.2 |
+| I.6 | SmarType keyboard actions on iOS, `select_keyboard` | M | I.3, an iOS build of SmarType |
+
 ## Phase 4 — Advanced / Exploratory (optional)
 
 Not scoped in detail now, per architecture §15 — designing these in depth before Phase 1–3 exist
@@ -108,7 +123,7 @@ would be speculative. When picked up:
 
 - Exploration Mode (scoped as a scenario generator, not a parallel execution model — architecture §3.5)
 - Timeline → scenario compiler (record & playback)
-- iOS driver (`IosAppiumDriver`)
+- iOS driver (`IosAppiumDriver`) — moved to the current iOS driver track (ADR-0009)
 - FPS/battery profiling — only if a concrete need is identified first
 
 Testing strategy for these will be defined at the point each is actually scoped.

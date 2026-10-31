@@ -13,6 +13,8 @@ Naming is not architecturally significant and can change without invalidating th
 - v1.0 (this document) — Principal Engineer review completed (§3); driver interface decomposed;
   plugin architecture, performance engine, domain module, regression planner, and richer agent
   API added; explicit Out of Scope list; ADRs added.
+- v1.0 amendment — ADR-0009 added to §14. The iOS driver (§10) starts now, ahead of its Phase 4
+  slot. The design does not change.
 
 ---
 
@@ -733,6 +735,7 @@ Full rationale for each is in `docs/adr/`. Index:
 - [ADR-0006](adr/0006-planning-is-external.md) — Planning is external to the framework
 - [ADR-0007](adr/0007-layered-device-driver-protocols.md) — Device Driver decomposed into layered protocols
 - [ADR-0008](adr/0008-deterministic-regression-selection.md) — Regression scenario selection is deterministic, tag-based
+- [ADR-0009](adr/0009-ios-driver-appium-xcuitest.md) — iOS driver through Appium XCUITest
 
 ## 15. Out of Scope / Future Work
 
