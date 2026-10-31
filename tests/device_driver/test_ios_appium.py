@@ -482,3 +482,30 @@ def test_clear_data_stops_before_install_when_removal_fails(tmp_path):
     with pytest.raises(DriverError):
         driver.clear_data("com.example.smartype")
     assert [call[1] for call in session.calls if call[0] == "script"] == ["mobile: removeApp"]
+
+
+def test_dump_hierarchy_reads_xml_source_with_placeholder(tmp_path):
+    xml = (
+        '<AppiumAUT><XCUIElementTypeTextField type="XCUIElementTypeTextField" name="f" '
+        'label="Message" value="Type here" placeholderValue="Type here"/></AppiumAUT>'
+    )
+    driver, session = make_driver(tmp_path, session=FakeAppiumSession(xml))
+    node = driver.dump_hierarchy().find(Selector(resource_id="f"))
+    assert node is not None and node.text == ""
+    assert ("script", "mobile: source", {"format": "xml"}) in session.calls
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda driver: driver.type_text("a"),
+        lambda driver: driver.type_keys("a"),
+        lambda driver: driver.press_key(KeyEvent.ENTER),
+    ],
+)
+def test_stale_focused_element_is_element_not_found(tmp_path, call):
+    driver, session = make_driver(tmp_path)
+    error = _selenium("StaleElementReferenceException")("focus moved")
+    session.switch_to.active_element.send_keys = lambda text: (_ for _ in ()).throw(error)
+    with pytest.raises(ElementNotFoundError, match="focused element changed"):
+        call(driver)
