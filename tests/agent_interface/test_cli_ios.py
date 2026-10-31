@@ -201,8 +201,27 @@ def test_unsupported_platform_is_skipped_with_exit_3(tmp_path, ios_calls):
 
     assert result.exit_code == 3, result.output
     assert "ios-scenario: SKIPPED (0 attempt(s))" in result.output
+    assert ios_calls[0] == []
     assert "SKIPPED: the scenario supports only android; the device platform is ios" in result.output
-    assert ios_calls[1].closed == 1
+    assert (tmp_path / "out" / "report.json").exists()
+
+
+def test_skip_does_not_make_the_driver(tmp_path):
+    def factory(udid):
+        raise AssertionError("the driver factory was called")
+
+    result = cli.execute_run(
+        _scenario(tmp_path, platforms=["android"]),
+        {},
+        tmp_path / "out",
+        ("json",),
+        "00008110-AAAA",
+        factory,
+        Platform.IOS,
+    )
+
+    assert result.skipped is True
+    assert result.status == "SKIPPED"
 
 
 def test_baseline_and_restore_have_no_platform_option(tmp_path):

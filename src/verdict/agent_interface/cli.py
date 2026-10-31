@@ -14,7 +14,7 @@ import click
 # has to happen somewhere above it -- the CLI entry point is that place.
 import verdict.domains.ime  # noqa: F401
 from verdict.core.exceptions import VerdictError
-from verdict.core.models import Platform
+from verdict.core.models import Platform, Timeline
 from verdict.device_driver.android import CONNECTION_ERRORS, AndroidUiautomator2Driver
 from verdict.device_driver.base import DeviceDriver
 from verdict.device_driver.ios_appium import (
@@ -47,6 +47,7 @@ from verdict.device_state.restore import (
 from verdict.reporting.generator import DEFAULT_FORMATS, ReportGenerator
 from verdict.scenario_engine.parser import parse_scenario
 from verdict.scenario_engine.runner import ScenarioResult, run_scenario
+from verdict.scenario_engine.schema import ScenarioSpec
 
 DriverFactory = Callable[[str | None], DeviceDriver]
 
@@ -81,6 +82,20 @@ def _close_driver(driver: DeviceDriver) -> None:
             close()
 
 
+def _skipped_result(spec: ScenarioSpec, platform: Platform) -> ScenarioResult:
+    # The same result and reason as `run_scenario` gives, but without a driver session.
+    supported = ", ".join(p.value for p in spec.platforms or ())
+    return ScenarioResult(
+        passed=False,
+        skipped=True,
+        skip_reason=(
+            f"the scenario supports only {supported}; the device platform is {platform.value}"
+        ),
+        attempts=0,
+        timeline=Timeline(run_id=str(uuid.uuid4()), scenario_name=spec.name),
+    )
+
+
 def execute_run(
     scenario_path: Path,
     variables: dict[str, str],
@@ -94,10 +109,15 @@ def execute_run(
     command so tests can inject a `driver_factory` (e.g. FakeDeviceDriver)
     without a real device/emulator attached.
 
-    `platform` selects the errors that make the run BLOCKED. The run closes
-    the driver session at the end, also after an error.
+    `platform` selects the errors that make the run BLOCKED. If the scenario
+    does not support `platform`, the result is SKIPPED and the driver is not
+    made. The run closes the driver session at the end, also after an error.
     """
     spec = parse_scenario(scenario_path, variables)
+    if not spec.supports(platform):
+        result = _skipped_result(spec, platform)
+        ReportGenerator(output_dir).generate(result, formats=formats)
+        return result
     driver = driver_factory(device)
     try:
         result = run_scenario(
