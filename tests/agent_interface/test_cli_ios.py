@@ -1,4 +1,5 @@
 import http.client
+import json
 from pathlib import Path
 
 import pytest
@@ -102,6 +103,7 @@ def test_platform_ios_selects_the_ios_driver_and_closes_it(tmp_path, ios_calls):
         {
             "udid": "00008110-AAAA",
             "appium_url": "http://127.0.0.1:4800",
+            "capabilities": {},
             "app_paths": {
                 "bha.keys.smartype": str(app.resolve()),
                 "com.example.other": str(Path("/apps/Other.ipa").resolve()),
@@ -121,13 +123,90 @@ def test_malformed_app_is_rejected(tmp_path, ios_calls, raw):
     assert ios_calls[0] == []
 
 
-def test_app_is_rejected_on_android(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    "option",
+    [
+        ["--app", "a.b=/apps/A.app"],
+        ["--capability", "appium:xcodeOrgId=TEAM"],
+        ["--capabilities-file", "CAPS"],
+    ],
+)
+def test_ios_only_options_are_rejected_on_android(tmp_path, monkeypatch, option):
     monkeypatch.setattr(cli, "AndroidUiautomator2Driver", lambda serial=None: pytest.fail("ran"))
+    caps = tmp_path / "caps.json"
+    caps.write_text("{}")
+    option = [str(caps) if value == "CAPS" else value for value in option]
+    result = CliRunner().invoke(cli.main, ["run", str(_scenario(tmp_path)), *option])
+    assert result.exit_code == 2
+    assert "apply only to --platform ios" in result.output
+
+
+def test_capabilities_go_to_the_ios_driver(tmp_path, ios_calls):
+    caps = tmp_path / "caps.json"
+    caps.write_text(
+        '{"appium:xcodeOrgId": "FILETEAM", "appium:wdaLocalPort": 8100, "appium:showXcodeLog": false}'
+    )
     result = CliRunner().invoke(
-        cli.main, ["run", str(_scenario(tmp_path)), "--app", "a.b=/apps/A.app"]
+        cli.main,
+        [
+            "run",
+            str(_scenario(tmp_path)),
+            "--platform",
+            "ios",
+            "--capabilities-file",
+            str(caps),
+            "--capability",
+            "appium:xcodeOrgId=ABCDE12345",
+            "--capability",
+            "appium:xcodeSigningId=Apple Development",
+            "--capability",
+            "appium:showXcodeLog=true",
+            "--capability",
+            "appium:wdaLaunchTimeout=120000",
+            "-o",
+            str(tmp_path / "out"),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert ios_calls[0][0]["capabilities"] == {
+        "appium:xcodeOrgId": "ABCDE12345",
+        "appium:wdaLocalPort": 8100,
+        "appium:showXcodeLog": True,
+        "appium:xcodeSigningId": "Apple Development",
+        "appium:wdaLaunchTimeout": 120000,
+    }
+
+
+def test_the_ios_driver_factory_passes_the_capabilities(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(cli, "IosAppiumDriver", lambda **kw: seen.update(kw) or _ios_driver())
+    cli.ios_driver_factory("http://h:1", {}, {"appium:usePreinstalledWDA": True})("UDID")
+    assert seen["capabilities"] == {"appium:usePreinstalledWDA": True}
+
+
+@pytest.mark.parametrize(
+    ("content", "message"),
+    [("not json", "cannot read"), ("[1, 2]", "must contain a JSON object")],
+)
+def test_bad_capabilities_file_is_a_usage_error(tmp_path, ios_calls, content, message):
+    caps = tmp_path / "caps.json"
+    caps.write_text(content)
+    result = CliRunner().invoke(
+        cli.main,
+        ["run", str(_scenario(tmp_path)), "--platform", "ios", "--capabilities-file", str(caps)],
     )
     assert result.exit_code == 2
-    assert "--app applies only to --platform ios" in result.output
+    assert message in result.output
+    assert ios_calls[0] == []
+
+
+def test_malformed_capability_is_a_usage_error(tmp_path, ios_calls):
+    result = CliRunner().invoke(
+        cli.main, ["run", str(_scenario(tmp_path)), "--platform", "ios", "--capability", "=x"]
+    )
+    assert result.exit_code == 2
+    assert "expected KEY=VALUE" in result.output
 
 
 def test_ios_connection_error_in_a_step_is_blocked_and_closes_the_session(tmp_path, monkeypatch):
@@ -201,8 +280,27 @@ def test_unsupported_platform_is_skipped_with_exit_3(tmp_path, ios_calls):
 
     assert result.exit_code == 3, result.output
     assert "ios-scenario: SKIPPED (0 attempt(s))" in result.output
+    assert ios_calls[0] == []
     assert "SKIPPED: the scenario supports only android; the device platform is ios" in result.output
-    assert ios_calls[1].closed == 1
+    assert (tmp_path / "out" / "report.json").exists()
+
+
+def test_skip_does_not_make_the_driver(tmp_path):
+    def factory(udid):
+        raise AssertionError("the driver factory was called")
+
+    result = cli.execute_run(
+        _scenario(tmp_path, platforms=["android"]),
+        {},
+        tmp_path / "out",
+        ("json",),
+        "00008110-AAAA",
+        factory,
+        Platform.IOS,
+    )
+
+    assert result.skipped is True
+    assert result.status == "SKIPPED"
 
 
 def test_baseline_and_restore_have_no_platform_option(tmp_path):
@@ -215,6 +313,33 @@ def test_baseline_and_restore_have_no_platform_option(tmp_path):
 
 
 # -- verdict doctor ios --------------------------------------------------------
+
+# A sample `devicectl list devices` entry. It is not real devicectl output (no Xcode here).
+_IPHONE = {
+    "hardwareProperties": {"udid": "00008110-AAAA"},
+    "deviceProperties": {"name": "Divy iPhone", "developerModeStatus": "enabled"},
+    "connectionProperties": {
+        "pairingState": "paired",
+        "tunnelState": "connected",
+        "transportType": "wired",
+    },
+}
+
+
+def _devicectl_json(*devices):
+    return {"result": {"devices": list(devices)}}
+
+
+def _devicectl_runner(*devices):
+    def runner(command):
+        if command[:2] == ["xcrun", "devicectl"]:
+            Path(command[-1]).write_text(json.dumps(_devicectl_json(*devices)))
+            return CommandResult(0)
+        if command[:2] == ["xcrun", "simctl"]:
+            return CommandResult(0, '{"devices": {}}')
+        return _ready_runner([])(command)
+
+    return runner
 
 
 def _ready_runner(calls: list[list[str]]):
@@ -229,12 +354,10 @@ def _ready_runner(calls: list[list[str]]):
                 return CommandResult(0, "2.12.1\n")
             case ["appium", "driver"]:
                 return CommandResult(0, "", "- xcuitest@7.28.0 [installed (npm)]\n")
+            case ["ffmpeg", "-version"]:
+                return CommandResult(0, "ffmpeg version 7.1 Copyright (c) 2000-2024\n")
             case ["xcrun", "devicectl"]:
-                Path(command[-1]).write_text(
-                    '{"result": {"devices": [{"hardwareProperties": {"udid": "00008110-AAAA"},'
-                    ' "deviceProperties": {"name": "Divy iPhone"},'
-                    ' "connectionProperties": {"tunnelState": "connected"}}]}}'
-                )
+                Path(command[-1]).write_text(json.dumps(_devicectl_json(_IPHONE)))
                 return CommandResult(0)
             case ["xcrun", "simctl"]:
                 return CommandResult(
@@ -248,8 +371,10 @@ def _ready_runner(calls: list[list[str]]):
 
 
 def _invoke_doctor(monkeypatch, runner, http_get=lambda url: 200, importer=lambda name: None, args=()):
-    def doctor(device, appium_url):
-        return ios_doctor.run_ios_doctor(device, appium_url, runner, http_get, importer)
+    def doctor(device, appium_url, capabilities):
+        return ios_doctor.run_ios_doctor(
+            device, appium_url, capabilities, runner, http_get, importer
+        )
 
     monkeypatch.setattr(cli, "run_ios_doctor", doctor)
     return CliRunner().invoke(cli.main, ["doctor", "ios", *args])
@@ -257,7 +382,11 @@ def _invoke_doctor(monkeypatch, runner, http_get=lambda url: 200, importer=lambd
 
 def test_doctor_passes_when_all_checks_pass(monkeypatch):
     calls: list[list[str]] = []
-    result = _invoke_doctor(monkeypatch, _ready_runner(calls), args=["--device", "00008110-AAAA"])
+    result = _invoke_doctor(
+        monkeypatch,
+        _ready_runner(calls),
+        args=["--device", "00008110-AAAA", "--capability", "appium:xcodeOrgId=ABCDE12345"],
+    )
 
     assert result.exit_code == 0, result.output
     assert "OK   xcode: Xcode 16.1 (/Applications/Xcode.app/Contents/Developer)" in result.output
@@ -265,8 +394,13 @@ def test_doctor_passes_when_all_checks_pass(monkeypatch):
     assert "OK   xcuitest driver: installed" in result.output
     assert "OK   appium server: answers at http://127.0.0.1:4723/status" in result.output
     assert "OK   device: Divy iPhone 00008110-AAAA" in result.output
+    assert "OK   ffmpeg: ffmpeg version 7.1" in result.output
+    assert "OK   developer mode: enabled on Divy iPhone 00008110-AAAA" in result.output
+    assert "OK   wda signing: given: appium:xcodeOrgId" in result.output
+    assert "INFO ui automation: Verdict cannot read this setting" in result.output
+    assert "fix: On the iPhone, turn on Settings > Developer > Enable UI Automation" in result.output
     assert "OK   ios extra" in result.output
-    assert "fix:" not in result.output
+    assert "WARN" not in result.output and "FAIL" not in result.output
     assert "iOS is ready." in result.output
     assert ["idevice_id", "-l"] not in calls
 
@@ -395,10 +529,8 @@ def test_doctor_fails_when_no_device_is_found(monkeypatch):
 def test_doctor_skips_devices_that_are_not_connected(monkeypatch):
     def runner(command):
         if command[:2] == ["xcrun", "devicectl"]:
-            Path(command[-1]).write_text(
-                '{"result": {"devices": [{"hardwareProperties": {"udid": "OLD"},'
-                ' "connectionProperties": {"tunnelState": "unavailable"}}]}}'
-            )
+            old = {**_IPHONE, "connectionProperties": {"tunnelState": "unavailable"}}
+            Path(command[-1]).write_text(json.dumps(_devicectl_json(old)))
             return CommandResult(0)
         if command[:2] == ["xcrun", "simctl"]:
             return CommandResult(0, '{"devices": {}}')
@@ -441,7 +573,97 @@ def test_doctor_on_a_mac_with_only_the_command_line_tools(monkeypatch):
         "FAIL appium",
         "FAIL xcuitest driver",
         "WARN appium server",
+        "WARN ffmpeg",
         "FAIL device",
+        "WARN developer mode",
+        "WARN wda signing",
+        "INFO ui automation",
         "OK   ios extra",
         "iOS is not ready",
     ]
+
+
+@pytest.mark.parametrize(
+    ("connection", "connected"),
+    [
+        ({"pairingState": "paired", "tunnelState": "connected", "transportType": "wired"}, True),
+        ({"tunnelState": "connected"}, True),
+        ({"pairingState": "paired", "transportType": "localNetwork"}, True),
+        ({"pairingState": "paired", "tunnelState": "disconnected"}, False),
+        ({"pairingState": "paired", "tunnelState": "unavailable"}, False),
+        ({"pairingState": "paired"}, False),
+        (
+            {"pairingState": "paired", "tunnelState": "disconnected", "transportType": "wired"},
+            False,
+        ),
+        ({"pairingState": "unpaired", "transportType": "wired"}, False),
+        ({}, False),
+    ],
+)
+def test_devicectl_device_connected(connection, connected):
+    device = {**_IPHONE, "connectionProperties": connection}
+    assert ios_doctor.devicectl_device_connected(device) is connected
+
+
+def test_doctor_does_not_accept_a_paired_iphone_that_is_not_connected(monkeypatch):
+    paired = {**_IPHONE, "connectionProperties": {"pairingState": "paired", "tunnelState": "disconnected"}}
+    result = _invoke_doctor(monkeypatch, _devicectl_runner(paired), args=["-s", "00008110-AAAA"])
+    assert result.exit_code == 2
+    assert "FAIL device: 00008110-AAAA is not connected or booted; found no device" in result.output
+
+
+def test_doctor_fails_when_developer_mode_is_disabled(monkeypatch):
+    disabled = {**_IPHONE, "deviceProperties": {"name": "Divy iPhone", "developerModeStatus": "disabled"}}
+    result = _invoke_doctor(monkeypatch, _devicectl_runner(disabled))
+    assert result.exit_code == 2
+    assert "FAIL developer mode: disabled on Divy iPhone 00008110-AAAA" in result.output
+    assert "Settings > Privacy & Security > Developer Mode" in result.output
+
+
+def test_doctor_warns_when_devicectl_does_not_report_developer_mode(monkeypatch):
+    unknown = {**_IPHONE, "deviceProperties": {"name": "Divy iPhone"}}
+    result = _invoke_doctor(
+        monkeypatch,
+        _devicectl_runner(unknown),
+        args=["--capability", "appium:usePreinstalledWDA=true"],
+    )
+    assert result.exit_code == 0, result.output
+    assert "WARN developer mode: devicectl did not report it for Divy iPhone" in result.output
+
+
+def test_doctor_warns_when_no_wda_signing_capability_is_given(monkeypatch):
+    result = _invoke_doctor(monkeypatch, _devicectl_runner(_IPHONE))
+    assert result.exit_code == 0, result.output
+    assert "WARN wda signing: no appium:xcodeOrgId" in result.output
+    assert "--capability appium:xcodeOrgId=TEAMID" in result.output
+
+
+@pytest.mark.parametrize(
+    "content",
+    ['{"appium:updatedWDABundleId": "com.divy.wda"}', '{"usePreinstalledWDA": true}'],
+)
+def test_doctor_reads_wda_signing_from_the_capabilities_file(monkeypatch, tmp_path, content):
+    caps = tmp_path / "caps.json"
+    caps.write_text(content)
+    result = _invoke_doctor(
+        monkeypatch, _devicectl_runner(_IPHONE), args=["--capabilities-file", str(caps)]
+    )
+    assert result.exit_code == 0, result.output
+    assert "OK   wda signing: given:" in result.output
+
+
+def test_doctor_needs_no_signing_or_developer_mode_for_a_simulator(monkeypatch):
+    result = _invoke_doctor(monkeypatch, _ready_runner([]), args=["-s", "SIM-1"])
+    assert result.exit_code == 0, result.output
+    assert "OK   developer mode: not necessary for a Simulator" in result.output
+    assert "OK   wda signing: not necessary for a Simulator" in result.output
+
+
+def test_doctor_warns_but_passes_when_ffmpeg_is_missing(monkeypatch):
+    runner = _with(_ready_runner([]), {("ffmpeg",): FileNotFoundError("ffmpeg")})
+    result = _invoke_doctor(
+        monkeypatch, runner, args=["--capability", "appium:xcodeOrgId=ABCDE12345"]
+    )
+    assert result.exit_code == 0, result.output
+    assert "WARN ffmpeg: ffmpeg is not on PATH" in result.output
+    assert "fix: brew install ffmpeg" in result.output

@@ -52,17 +52,26 @@ def test_swipe_moves_from_start_to_end_in_the_duration(tmp_path):
     assert (steps[2]["x"], steps[2]["y"], steps[2]["duration"]) == (3, 4, 500)
 
 
-def test_scroll_without_selector_scrolls_the_screen(tmp_path):
+@pytest.mark.parametrize("direction", list(Direction))
+def test_scroll_without_selector_swipes_in_the_finger_direction(tmp_path, direction):
+    # Like Android `swipe_ext`: UP moves the finger up and shows the content below.
     driver, session = make_driver(tmp_path)
-    driver.scroll(Direction.DOWN)
-    assert session.calls[-1] == ("script", "mobile: scroll", {"direction": "down"})
+    driver.scroll(direction)
+    assert session.calls[-1] == ("script", "mobile: swipe", {"direction": direction.value})
 
 
-def test_scroll_with_selector_scrolls_that_element(tmp_path):
+@pytest.mark.parametrize("direction", list(Direction))
+def test_scroll_with_selector_shows_the_content_in_that_direction(tmp_path, direction):
+    # Like Android `scroll.forward`: DOWN shows the content below. In
+    # `mobile: scroll`, the direction is the content to show.
     driver, session = make_driver(tmp_path)
     session.add_element(BY_ACCESSIBILITY_ID, "list", "el-9")
-    driver.scroll(Direction.UP, Selector(resource_id="list"))
-    assert session.calls[-1] == ("script", "mobile: scroll", {"direction": "up", "elementId": "el-9"})
+    driver.scroll(direction, Selector(resource_id="list"))
+    assert session.calls[-1] == (
+        "script",
+        "mobile: scroll",
+        {"direction": direction.value, "elementId": "el-9"},
+    )
 
 
 def test_scroll_with_missing_element_raises(tmp_path):
@@ -254,7 +263,10 @@ def test_connection_errors_include_transport_and_session_failures():
     assert issubclass(http.client.RemoteDisconnected, IOS_CONNECTION_ERRORS)
     assert issubclass(MaxRetryError, IOS_CONNECTION_ERRORS)
     assert issubclass(InvalidSessionIdException, IOS_CONNECTION_ERRORS)
-    assert not issubclass(NoSuchElementException, IOS_CONNECTION_ERRORS)
+    # The base class covers "element not found" too. The driver changes that
+    # error into ElementNotFoundError before it leaves the driver.
+    assert issubclass(NoSuchElementException, IOS_CONNECTION_ERRORS)
+    assert not issubclass(ElementNotFoundError, IOS_CONNECTION_ERRORS)
 
 
 def test_missing_appium_client_gives_a_clear_error(tmp_path, monkeypatch):
@@ -268,3 +280,57 @@ def test_missing_appium_client_gives_a_clear_error(tmp_path, monkeypatch):
     monkeypatch.setattr(builtins, "__import__", no_appium)
     with pytest.raises(DriverError, match=r"\[ios\]"):
         IosAppiumDriver(evidence_dir=tmp_path)
+
+
+def test_no_such_element_from_lookup_is_not_found(tmp_path):
+    from selenium.common.exceptions import NoSuchElementException
+
+    driver, session = make_driver(tmp_path, poll_ms=100, tap_wait_ms=200)
+    session.find_error = NoSuchElementException("none")
+    assert not driver.wait_for(Selector(resource_id="x"), timeout_ms=200)
+    with pytest.raises(ElementNotFoundError):
+        driver.tap_selector(Selector(resource_id="x"))
+
+
+def test_lost_session_error_is_a_connection_error(tmp_path):
+    from selenium.common.exceptions import WebDriverException
+
+    driver, session = make_driver(tmp_path)
+    session.find_error = WebDriverException("WDA crashed")
+    with pytest.raises(IOS_CONNECTION_ERRORS):
+        driver.tap_selector(Selector(resource_id="x"))
+
+
+def test_stale_element_is_found_again_one_time(tmp_path):
+    driver, session = make_driver(tmp_path)
+    element = session.add_element(BY_ACCESSIBILITY_ID, "sendButton", "el-2")
+    element.stale_clicks = 1
+    driver.tap_selector(Selector(resource_id="sendButton"))
+    assert session.calls[-1] == ("click", "el-2")
+    assert [call[0] for call in session.calls].count("find") == 2
+
+
+def test_element_stale_two_times_is_not_found(tmp_path):
+    driver, session = make_driver(tmp_path)
+    element = session.add_element(BY_ACCESSIBILITY_ID, "sendButton", "el-2")
+    element.stale_clicks = 2
+    with pytest.raises(ElementNotFoundError, match="stale"):
+        driver.tap_selector(Selector(resource_id="sendButton"))
+
+
+def test_stale_element_in_scroll_is_found_again(tmp_path):
+    from selenium.common.exceptions import StaleElementReferenceException
+
+    driver, session = make_driver(tmp_path)
+    session.add_element(BY_ACCESSIBILITY_ID, "list", "el-9")
+    real_script = session.execute_script
+    failures = [StaleElementReferenceException("stale")]
+
+    def script(name, *args):
+        if failures:
+            raise failures.pop()
+        return real_script(name, *args)
+
+    session.execute_script = script
+    driver.scroll(Direction.DOWN, Selector(resource_id="list"))
+    assert session.calls[-1] == ("script", "mobile: scroll", {"direction": "down", "elementId": "el-9"})

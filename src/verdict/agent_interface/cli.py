@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import uuid
 from collections.abc import Callable
 from contextlib import suppress
 from pathlib import Path
+from typing import Any, TypeVar
 
 import click
 
@@ -14,7 +16,7 @@ import click
 # has to happen somewhere above it -- the CLI entry point is that place.
 import verdict.domains.ime  # noqa: F401
 from verdict.core.exceptions import VerdictError
-from verdict.core.models import Platform
+from verdict.core.models import Platform, Timeline
 from verdict.device_driver.android import CONNECTION_ERRORS, AndroidUiautomator2Driver
 from verdict.device_driver.base import DeviceDriver
 from verdict.device_driver.ios_appium import (
@@ -47,6 +49,7 @@ from verdict.device_state.restore import (
 from verdict.reporting.generator import DEFAULT_FORMATS, ReportGenerator
 from verdict.scenario_engine.parser import parse_scenario
 from verdict.scenario_engine.runner import ScenarioResult, run_scenario
+from verdict.scenario_engine.schema import ScenarioSpec
 
 DriverFactory = Callable[[str | None], DeviceDriver]
 
@@ -55,7 +58,9 @@ def _default_driver_factory(serial: str | None) -> DeviceDriver:
     return AndroidUiautomator2Driver(serial=serial)
 
 
-def ios_driver_factory(appium_url: str, app_paths: dict[str, str]) -> DriverFactory:
+def ios_driver_factory(
+    appium_url: str, app_paths: dict[str, str], capabilities: dict[str, Any] | None = None
+) -> DriverFactory:
     """Return a factory that opens an Appium session on the iOS device with that UDID."""
 
     def factory(udid: str | None) -> DeviceDriver:
@@ -63,7 +68,12 @@ def ios_driver_factory(appium_url: str, app_paths: dict[str, str]) -> DriverFact
             raise IosExtraMissingError(
                 f"the `ios` extra is not installed. Install it: {IOS_EXTRA_INSTALL}"
             )
-        return IosAppiumDriver(udid=udid, appium_url=appium_url, app_paths=app_paths)
+        return IosAppiumDriver(
+            udid=udid,
+            appium_url=appium_url,
+            capabilities=dict(capabilities or {}),
+            app_paths=app_paths,
+        )
 
     return factory
 
@@ -81,6 +91,20 @@ def _close_driver(driver: DeviceDriver) -> None:
             close()
 
 
+def _skipped_result(spec: ScenarioSpec, platform: Platform) -> ScenarioResult:
+    # The same result and reason as `run_scenario` gives, but without a driver session.
+    supported = ", ".join(p.value for p in spec.platforms or ())
+    return ScenarioResult(
+        passed=False,
+        skipped=True,
+        skip_reason=(
+            f"the scenario supports only {supported}; the device platform is {platform.value}"
+        ),
+        attempts=0,
+        timeline=Timeline(run_id=str(uuid.uuid4()), scenario_name=spec.name),
+    )
+
+
 def execute_run(
     scenario_path: Path,
     variables: dict[str, str],
@@ -94,10 +118,15 @@ def execute_run(
     command so tests can inject a `driver_factory` (e.g. FakeDeviceDriver)
     without a real device/emulator attached.
 
-    `platform` selects the errors that make the run BLOCKED. The run closes
-    the driver session at the end, also after an error.
+    `platform` selects the errors that make the run BLOCKED. If the scenario
+    does not support `platform`, the result is SKIPPED and the driver is not
+    made. The run closes the driver session at the end, also after an error.
     """
     spec = parse_scenario(scenario_path, variables)
+    if not spec.supports(platform):
+        result = _skipped_result(spec, platform)
+        ReportGenerator(output_dir).generate(result, formats=formats)
+        return result
     driver = driver_factory(device)
     try:
         result = run_scenario(
@@ -124,6 +153,57 @@ def _parse_app(raw: str) -> tuple[str, str]:
     if not bundle_id or not path:
         raise click.BadParameter(f"expected BUNDLE_ID=PATH, got {raw!r}")
     return bundle_id, str(Path(path).expanduser().resolve())
+
+
+def _parse_capability(raw: str) -> tuple[str, Any]:
+    key, text = raw.split("=", 1) if "=" in raw else ("", "")
+    if not key:
+        raise click.BadParameter(f"expected KEY=VALUE, got {raw!r}", param_hint="--capability")
+    try:
+        return key, json.loads(text)
+    except ValueError:
+        return key, text
+
+
+def load_capabilities(path: Path | None, pairs: tuple[str, ...]) -> dict[str, Any]:
+    """Read the capabilities file (a JSON object), then apply the KEY=VALUE pairs on top."""
+    capabilities: dict[str, Any] = {}
+    if path is not None:
+        try:
+            data = json.loads(path.read_text())
+        except (OSError, ValueError) as exc:
+            raise click.BadParameter(
+                f"cannot read {path} as JSON: {exc}", param_hint="--capabilities-file"
+            ) from exc
+        if not isinstance(data, dict):
+            raise click.BadParameter(
+                f"{path} must contain a JSON object", param_hint="--capabilities-file"
+            )
+        capabilities.update(data)
+    capabilities.update(_parse_capability(raw) for raw in pairs)
+    return capabilities
+
+
+_F = TypeVar("_F", bound=Callable[..., Any])
+
+
+def _capability_options(func: _F) -> _F:
+    func = click.option(
+        "--capabilities-file",
+        type=click.Path(exists=True, dir_okay=False, path_type=Path),
+        default=None,
+        help="A JSON object of Appium capabilities (iOS only).",
+    )(func)
+    func = click.option(
+        "--capability",
+        "capability_pairs",
+        multiple=True,
+        metavar="KEY=VALUE",
+        help="An Appium capability (iOS only), for example appium:xcodeOrgId=TEAMID. "
+        "A JSON value (true, 8100) is parsed. It overrides --capabilities-file. "
+        "May be passed multiple times.",
+    )(func)
+    return func
 
 
 @click.group()
@@ -169,6 +249,7 @@ def main() -> None:
     help="iOS only: the .app or .ipa file of a bundle id. clear_data needs it. "
     "May be passed multiple times.",
 )
+@_capability_options
 @click.option(
     "--output-dir",
     "-o",
@@ -190,6 +271,8 @@ def run(
     device: str | None,
     appium_url: str,
     apps: tuple[str, ...],
+    capability_pairs: tuple[str, ...],
+    capabilities_file: Path | None,
     output_dir: Path,
     formats: str,
 ) -> None:
@@ -205,10 +288,13 @@ def run(
     target = Platform(platform)
     if target is Platform.IOS:
         app_paths = dict(_parse_app(a) for a in apps)
-        factory = ios_driver_factory(appium_url, app_paths)
+        capabilities = load_capabilities(capabilities_file, capability_pairs)
+        factory = ios_driver_factory(appium_url, app_paths, capabilities)
     else:
-        if apps:
-            raise click.UsageError("--app applies only to --platform ios.")
+        if apps or capability_pairs or capabilities_file:
+            raise click.UsageError(
+                "--app, --capability, and --capabilities-file apply only to --platform ios."
+            )
         factory = _default_driver_factory
     blocked_errors = blocked_errors_for(target)
 
@@ -250,14 +336,25 @@ def doctor() -> None:
     show_default=True,
     help="The URL of the Appium server.",
 )
-def doctor_ios(device: str | None, appium_url: str) -> None:
-    """Check Xcode, Appium, the XCUITest driver, the device, and the `ios` extra.
+@_capability_options
+def doctor_ios(
+    device: str | None,
+    appium_url: str,
+    capability_pairs: tuple[str, ...],
+    capabilities_file: Path | None,
+) -> None:
+    """Check that this Mac and the device are ready for iOS tests.
 
-    Each check prints one line: OK, WARN, or FAIL. Each WARN and FAIL also
-    prints a fix. Exit 0: no required check failed. Exit 2: a required check
-    failed.
+    The checks: Xcode, Appium, the XCUITest driver, the Appium server, ffmpeg,
+    the device, Developer Mode, WDA signing, and the `ios` extra. Give the
+    same capabilities as to `verdict run`, so the WDA signing check can read them.
+
+    Each check prints one line: OK, INFO, WARN, or FAIL. Each INFO, WARN, and
+    FAIL also prints a fix. Exit 0: no required check failed. Exit 2: a
+    required check failed. A WARN does not change the exit code.
     """
-    checks = run_ios_doctor(device, appium_url)
+    capabilities = load_capabilities(capabilities_file, capability_pairs)
+    checks = run_ios_doctor(device, appium_url, capabilities)
     for check in checks:
         click.echo(f"{check.status.value:<4} {check.name}: {check.detail}")
         if check.fix:

@@ -68,14 +68,19 @@ Verdict runs iOS scenarios through an Appium server with the XCUITest driver (se
 Check that the Mac is ready:
 
 ```bash
-verdict doctor ios [--device UDID] [--appium-url http://127.0.0.1:4723]
+verdict doctor ios [--device UDID] [--appium-url http://127.0.0.1:4723] \
+  [--capability KEY=VALUE ...] [--capabilities-file PATH]
 ```
 
-- It checks Xcode, `appium`, the `xcuitest` driver, the Appium server, the iPhone or booted
-  Simulator, and the iOS extra.
-- It prints one line for each check (`OK`, `WARN`, or `FAIL`) and a fix for each problem.
-- Exit 0: no required check failed. Exit 2: a required check failed. A server that does not
-  answer is only a `WARN`.
+- It checks Xcode, `appium`, the `xcuitest` driver, the Appium server, `ffmpeg`, the iPhone or
+  booted Simulator, Developer Mode, WDA signing, and the iOS extra.
+- Give it the same capabilities as `verdict run`. Then the WDA signing check can read
+  `appium:xcodeOrgId`, `appium:updatedWDABundleId`, or `appium:usePreinstalledWDA`.
+- It cannot read the UI Automation setting. It prints an `INFO` line: turn on
+  Settings > Developer > Enable UI Automation on the iPhone.
+- It prints one line for each check (`OK`, `INFO`, `WARN`, or `FAIL`) and a fix for each problem.
+- Exit 0: no required check failed. Exit 2: a required check failed. A `WARN` does not change
+  the exit code.
 
 Run a scenario on iOS:
 
@@ -87,6 +92,11 @@ verdict run scenario.yaml --platform ios --device UDID --app bha.keys.smartype=/
   Simulator.
 - `--appium-url` sets the server URL. `--app BUNDLE_ID=PATH` gives the app file for `clear_data`.
   You can give `--app` more than one time.
+- `--capability KEY=VALUE` gives one Appium capability. A JSON value (`true`, `8100`) is parsed;
+  other values stay text. `--capabilities-file PATH` reads a JSON object. A `--capability` value
+  overrides the file value. A real iPhone needs WDA signing, for example:
+  `--capability appium:xcodeOrgId=TEAMID --capability "appium:xcodeSigningId=Apple Development"`.
+- `--app`, `--capability`, and `--capabilities-file` are usage errors on Android.
 - Exit 0: PASSED. Exit 1: FAILED. Exit 2: BLOCKED (the connection failed, or the iOS extra is not
   installed). Exit 3: SKIPPED (the scenario does not support the platform; the reason is printed).
 - `verdict baseline` and `verdict restore` are for Android only.
