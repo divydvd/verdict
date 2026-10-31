@@ -860,3 +860,52 @@ def test_doctor_accepts_updated_wda_bundle_id_with_a_team_id(monkeypatch):
     )
     assert result.exit_code == 0, result.output
     assert "OK   wda signing: given: appium:xcodeOrgId" in result.output
+
+
+@pytest.mark.parametrize(
+    ("file_value", "flag_value", "signed"),
+    [("true", "false", False), ("false", "true", True)],
+)
+def test_doctor_uses_the_last_wda_signing_value(
+    monkeypatch, tmp_path, file_value, flag_value, signed
+):
+    caps = tmp_path / "caps.json"
+    caps.write_text(f'{{"usePreinstalledWDA": {file_value}}}')
+    result = _invoke_doctor(
+        monkeypatch,
+        _devicectl_runner(_IPHONE),
+        args=[
+            "--capabilities-file",
+            str(caps),
+            "--capability",
+            f"appium:usePreinstalledWDA={flag_value}",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert ("OK   wda signing" in result.output) is signed
+    assert ("WARN wda signing: no appium:xcodeOrgId" in result.output) is not signed
+
+
+def test_doctor_ignores_a_team_id_that_is_overridden_with_an_empty_value(monkeypatch):
+    result = _invoke_doctor(
+        monkeypatch,
+        _devicectl_runner(_IPHONE),
+        args=["--capability", "xcodeOrgId=ABCDE12345", "--capability", "appium:xcodeOrgId="],
+    )
+    assert result.exit_code == 0, result.output
+    assert "OK   wda signing" not in result.output
+    assert "WARN wda signing: no appium:xcodeOrgId" in result.output
+
+
+@pytest.mark.parametrize(
+    ("capabilities", "given"),
+    [
+        ({"updatedWDABundleId": "com.divy.wda", "appium:updatedWDABundleId": ""}, False),
+        ({"appium:updatedWDABundleId": "", "updatedWDABundleId": "com.divy.wda"}, True),
+        ({"appium:usePreinstalledWDA": True, "usePreinstalledWDA": False}, False),
+        ({}, False),
+    ],
+)
+def test_given_uses_the_last_alias_in_insertion_order(capabilities, given):
+    key = next(iter(capabilities), "x").removeprefix("appium:")
+    assert ios_doctor._given(capabilities, key) is given
