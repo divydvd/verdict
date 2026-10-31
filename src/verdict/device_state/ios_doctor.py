@@ -353,8 +353,17 @@ def check_developer_mode(devices: Sequence[IosDevice], device: str | None) -> li
     return checks
 
 
+def _effective(capabilities: dict[str, Any], key: str) -> Any:
+    """Return the last value in insertion order for `key` or `appium:key`."""
+    value = None
+    for name, item in capabilities.items():
+        if name in (key, f"appium:{key}"):
+            value = item
+    return value
+
+
 def _given(capabilities: dict[str, Any], key: str) -> bool:
-    return any(capabilities.get(name) not in (None, "", False) for name in (key, f"appium:{key}"))
+    return _effective(capabilities, key) not in (None, "", False)
 
 
 def check_wda_signing(
