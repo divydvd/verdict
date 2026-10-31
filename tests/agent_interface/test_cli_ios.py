@@ -427,17 +427,17 @@ def _with(base, overrides):
         ),
         (
             {("xcode-select",): FileNotFoundError("xcode-select")},
-            "FAIL xcode: xcode-select found no developer folder",
+            "FAIL xcode: xcode-select is missing",
             "Install Xcode from the App Store",
         ),
         (
             {("xcodebuild",): CommandResult(69, "", "You have not agreed to the Xcode license.")},
-            "FAIL xcode: xcodebuild -version failed: You have not agreed",
+            "FAIL xcode: `xcodebuild -version` failed with exit code 69: You have not agreed",
             "sudo xcodebuild -license accept",
         ),
         (
             {("appium",): FileNotFoundError("appium")},
-            "FAIL appium: appium is not on PATH",
+            "FAIL appium: appium is missing from PATH",
             "npm i -g appium",
         ),
         (
@@ -640,7 +640,12 @@ def test_doctor_warns_when_no_wda_signing_capability_is_given(monkeypatch):
 
 @pytest.mark.parametrize(
     "content",
-    ['{"appium:updatedWDABundleId": "com.divy.wda"}', '{"usePreinstalledWDA": true}'],
+    [
+        '{"appium:updatedWDABundleId": "com.divy.wda"}',
+        '{"usePreinstalledWDA": true}',
+        '{"appium:xcodeConfigFile": "/signing/wda.xcconfig"}',
+        '{"xcodeConfigFile": "/signing/wda.xcconfig"}',
+    ],
 )
 def test_doctor_reads_wda_signing_from_the_capabilities_file(monkeypatch, tmp_path, content):
     caps = tmp_path / "caps.json"
@@ -665,5 +670,75 @@ def test_doctor_warns_but_passes_when_ffmpeg_is_missing(monkeypatch):
         monkeypatch, runner, args=["--capability", "appium:xcodeOrgId=ABCDE12345"]
     )
     assert result.exit_code == 0, result.output
-    assert "WARN ffmpeg: ffmpeg is not on PATH" in result.output
+    assert "WARN ffmpeg: ffmpeg is missing from PATH" in result.output
     assert "fix: brew install ffmpeg" in result.output
+
+
+_TIMEOUT = CommandResult(124, "", "timeout after 60 s")
+
+
+@pytest.mark.parametrize(
+    ("overrides", "expected", "absent"),
+    [
+        (
+            {("appium", "--version"): CommandResult(1, "", "Error: Cannot find module 'node:fs'\n")},
+            "FAIL appium: `appium --version` failed with exit code 1: Error: Cannot find module",
+            "missing",
+        ),
+        (
+            {("appium", "--version"): _TIMEOUT},
+            "FAIL appium: `appium --version` failed with exit code 124: timeout after 60 s",
+            "missing",
+        ),
+        (
+            {("appium", "driver"): CommandResult(1, "", "Error: EACCES: permission denied\n")},
+            (
+                "FAIL xcuitest driver: `appium driver list --installed` failed with exit code 1: "
+                "Error: EACCES: permission denied"
+            ),
+            "not installed",
+        ),
+        (
+            {("appium", "driver"): FileNotFoundError("appium")},
+            "FAIL xcuitest driver: appium is missing from PATH",
+            "not installed",
+        ),
+        (
+            {("xcode-select",): CommandResult(2, "", "xcode-select: error: unable to get active developer directory\n")},
+            "FAIL xcode: `xcode-select -p` failed with exit code 2: xcode-select: error: unable",
+            "missing",
+        ),
+        (
+            {("xcodebuild",): FileNotFoundError("xcodebuild")},
+            "FAIL xcode: xcodebuild is missing",
+            "failed",
+        ),
+    ],
+)
+def test_doctor_tells_a_failed_tool_from_a_missing_tool(monkeypatch, overrides, expected, absent):
+    result = _invoke_doctor(monkeypatch, _with(_ready_runner([]), overrides))
+
+    assert result.exit_code == 2, result.output
+    assert expected in result.output
+    line = next(line for line in result.output.splitlines() if line.startswith(expected[:10]))
+    assert absent not in line
+
+
+@pytest.mark.parametrize(
+    ("outcome", "expected"),
+    [
+        (CommandResult(1, "", "dyld: Library not loaded: libavcodec.61.dylib\n"),
+         "WARN ffmpeg: `ffmpeg -version` failed with exit code 1: dyld: Library not loaded"),
+        (_TIMEOUT, "WARN ffmpeg: `ffmpeg -version` failed with exit code 124: timeout after 60 s"),
+        (CommandResult(3, "only stdout\n", ""),
+         "WARN ffmpeg: `ffmpeg -version` failed with exit code 3: only stdout"),
+    ],
+)
+def test_doctor_reports_a_failed_ffmpeg_with_its_error(monkeypatch, outcome, expected):
+    runner = _with(_ready_runner([]), {("ffmpeg",): outcome})
+    result = _invoke_doctor(
+        monkeypatch, runner, args=["--capability", "appium:xcodeOrgId=ABCDE12345"]
+    )
+    assert result.exit_code == 0, result.output
+    assert expected in result.output
+    assert "fix: Repair the ffmpeg install" in result.output

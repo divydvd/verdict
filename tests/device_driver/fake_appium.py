@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -78,8 +79,10 @@ class FakeAppiumSession:
         return b"\x89PNG fake"
 
     def get_log(self, log_type: str) -> list[dict[str, Any]]:
+        # Like the XCUITest syslog getter: each read clears the buffer.
         self.calls.append(("get_log", log_type))
-        return self.syslog
+        entries, self.syslog = self.syslog, []
+        return entries
 
     def start_recording_screen(self, **options: Any) -> Any:
         self.calls.append(("start_recording",))
@@ -93,10 +96,32 @@ class FakeAppiumSession:
         self.calls.append(("quit",))
 
 
+class FakeClock:
+    """A monotonic clock that only `sleep` moves forward."""
+
+    def __init__(self, on_sleep: Callable[[float], None] | None = None) -> None:
+        self.time = 0.0
+        self.on_sleep = on_sleep
+
+    def now(self) -> float:
+        return self.time
+
+    def sleep(self, seconds: float) -> None:
+        self.time += seconds
+        if self.on_sleep is not None:
+            self.on_sleep(seconds)
+
+
 def make_driver(
     tmp_path: Path, session: FakeAppiumSession | None = None, **kwargs: Any
 ) -> tuple[IosAppiumDriver, FakeAppiumSession]:
     fake = session or FakeAppiumSession()
-    kwargs.setdefault("sleep", lambda seconds: None)
-    driver = IosAppiumDriver(session_factory=lambda: fake, evidence_dir=tmp_path, **kwargs)
+    clock = FakeClock(kwargs.pop("sleep", None))
+    driver = IosAppiumDriver(
+        session_factory=lambda: fake,
+        evidence_dir=tmp_path,
+        sleep=clock.sleep,
+        clock=clock.now,
+        **kwargs,
+    )
     return driver, fake
