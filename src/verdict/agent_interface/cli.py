@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import uuid
 from collections.abc import Callable
 from contextlib import suppress
 from pathlib import Path
+from typing import Any, TypeVar
 
 import click
 
@@ -56,7 +58,9 @@ def _default_driver_factory(serial: str | None) -> DeviceDriver:
     return AndroidUiautomator2Driver(serial=serial)
 
 
-def ios_driver_factory(appium_url: str, app_paths: dict[str, str]) -> DriverFactory:
+def ios_driver_factory(
+    appium_url: str, app_paths: dict[str, str], capabilities: dict[str, Any] | None = None
+) -> DriverFactory:
     """Return a factory that opens an Appium session on the iOS device with that UDID."""
 
     def factory(udid: str | None) -> DeviceDriver:
@@ -64,7 +68,12 @@ def ios_driver_factory(appium_url: str, app_paths: dict[str, str]) -> DriverFact
             raise IosExtraMissingError(
                 f"the `ios` extra is not installed. Install it: {IOS_EXTRA_INSTALL}"
             )
-        return IosAppiumDriver(udid=udid, appium_url=appium_url, app_paths=app_paths)
+        return IosAppiumDriver(
+            udid=udid,
+            appium_url=appium_url,
+            capabilities=dict(capabilities or {}),
+            app_paths=app_paths,
+        )
 
     return factory
 
@@ -146,6 +155,57 @@ def _parse_app(raw: str) -> tuple[str, str]:
     return bundle_id, str(Path(path).expanduser().resolve())
 
 
+def _parse_capability(raw: str) -> tuple[str, Any]:
+    key, text = raw.split("=", 1) if "=" in raw else ("", "")
+    if not key:
+        raise click.BadParameter(f"expected KEY=VALUE, got {raw!r}", param_hint="--capability")
+    try:
+        return key, json.loads(text)
+    except ValueError:
+        return key, text
+
+
+def load_capabilities(path: Path | None, pairs: tuple[str, ...]) -> dict[str, Any]:
+    """Read the capabilities file (a JSON object), then apply the KEY=VALUE pairs on top."""
+    capabilities: dict[str, Any] = {}
+    if path is not None:
+        try:
+            data = json.loads(path.read_text())
+        except (OSError, ValueError) as exc:
+            raise click.BadParameter(
+                f"cannot read {path} as JSON: {exc}", param_hint="--capabilities-file"
+            ) from exc
+        if not isinstance(data, dict):
+            raise click.BadParameter(
+                f"{path} must contain a JSON object", param_hint="--capabilities-file"
+            )
+        capabilities.update(data)
+    capabilities.update(_parse_capability(raw) for raw in pairs)
+    return capabilities
+
+
+_F = TypeVar("_F", bound=Callable[..., Any])
+
+
+def _capability_options(func: _F) -> _F:
+    func = click.option(
+        "--capabilities-file",
+        type=click.Path(exists=True, dir_okay=False, path_type=Path),
+        default=None,
+        help="iOS only: a JSON object of Appium capabilities.",
+    )(func)
+    func = click.option(
+        "--capability",
+        "capability_pairs",
+        multiple=True,
+        metavar="KEY=VALUE",
+        help="iOS only: an Appium capability, for example appium:xcodeOrgId=TEAMID. "
+        "A JSON value (true, 8100) is parsed. It overrides --capabilities-file. "
+        "May be passed multiple times.",
+    )(func)
+    return func
+
+
 @click.group()
 def main() -> None:
     """Verdict: agentic mobile testing platform CLI."""
@@ -189,6 +249,7 @@ def main() -> None:
     help="iOS only: the .app or .ipa file of a bundle id. clear_data needs it. "
     "May be passed multiple times.",
 )
+@_capability_options
 @click.option(
     "--output-dir",
     "-o",
@@ -210,6 +271,8 @@ def run(
     device: str | None,
     appium_url: str,
     apps: tuple[str, ...],
+    capability_pairs: tuple[str, ...],
+    capabilities_file: Path | None,
     output_dir: Path,
     formats: str,
 ) -> None:
@@ -225,10 +288,13 @@ def run(
     target = Platform(platform)
     if target is Platform.IOS:
         app_paths = dict(_parse_app(a) for a in apps)
-        factory = ios_driver_factory(appium_url, app_paths)
+        capabilities = load_capabilities(capabilities_file, capability_pairs)
+        factory = ios_driver_factory(appium_url, app_paths, capabilities)
     else:
-        if apps:
-            raise click.UsageError("--app applies only to --platform ios.")
+        if apps or capability_pairs or capabilities_file:
+            raise click.UsageError(
+                "--app, --capability, and --capabilities-file apply only to --platform ios."
+            )
         factory = _default_driver_factory
     blocked_errors = blocked_errors_for(target)
 

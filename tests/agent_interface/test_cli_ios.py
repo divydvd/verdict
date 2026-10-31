@@ -102,6 +102,7 @@ def test_platform_ios_selects_the_ios_driver_and_closes_it(tmp_path, ios_calls):
         {
             "udid": "00008110-AAAA",
             "appium_url": "http://127.0.0.1:4800",
+            "capabilities": {},
             "app_paths": {
                 "bha.keys.smartype": str(app.resolve()),
                 "com.example.other": str(Path("/apps/Other.ipa").resolve()),
@@ -121,13 +122,90 @@ def test_malformed_app_is_rejected(tmp_path, ios_calls, raw):
     assert ios_calls[0] == []
 
 
-def test_app_is_rejected_on_android(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    "option",
+    [
+        ["--app", "a.b=/apps/A.app"],
+        ["--capability", "appium:xcodeOrgId=TEAM"],
+        ["--capabilities-file", "CAPS"],
+    ],
+)
+def test_ios_only_options_are_rejected_on_android(tmp_path, monkeypatch, option):
     monkeypatch.setattr(cli, "AndroidUiautomator2Driver", lambda serial=None: pytest.fail("ran"))
+    caps = tmp_path / "caps.json"
+    caps.write_text("{}")
+    option = [str(caps) if value == "CAPS" else value for value in option]
+    result = CliRunner().invoke(cli.main, ["run", str(_scenario(tmp_path)), *option])
+    assert result.exit_code == 2
+    assert "apply only to --platform ios" in result.output
+
+
+def test_capabilities_go_to_the_ios_driver(tmp_path, ios_calls):
+    caps = tmp_path / "caps.json"
+    caps.write_text(
+        '{"appium:xcodeOrgId": "FILETEAM", "appium:wdaLocalPort": 8100, "appium:showXcodeLog": false}'
+    )
     result = CliRunner().invoke(
-        cli.main, ["run", str(_scenario(tmp_path)), "--app", "a.b=/apps/A.app"]
+        cli.main,
+        [
+            "run",
+            str(_scenario(tmp_path)),
+            "--platform",
+            "ios",
+            "--capabilities-file",
+            str(caps),
+            "--capability",
+            "appium:xcodeOrgId=ABCDE12345",
+            "--capability",
+            "appium:xcodeSigningId=Apple Development",
+            "--capability",
+            "appium:showXcodeLog=true",
+            "--capability",
+            "appium:wdaLaunchTimeout=120000",
+            "-o",
+            str(tmp_path / "out"),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert ios_calls[0][0]["capabilities"] == {
+        "appium:xcodeOrgId": "ABCDE12345",
+        "appium:wdaLocalPort": 8100,
+        "appium:showXcodeLog": True,
+        "appium:xcodeSigningId": "Apple Development",
+        "appium:wdaLaunchTimeout": 120000,
+    }
+
+
+def test_the_ios_driver_factory_passes_the_capabilities(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(cli, "IosAppiumDriver", lambda **kw: seen.update(kw) or _ios_driver())
+    cli.ios_driver_factory("http://h:1", {}, {"appium:usePreinstalledWDA": True})("UDID")
+    assert seen["capabilities"] == {"appium:usePreinstalledWDA": True}
+
+
+@pytest.mark.parametrize(
+    ("content", "message"),
+    [("not json", "cannot read"), ("[1, 2]", "must contain a JSON object")],
+)
+def test_bad_capabilities_file_is_a_usage_error(tmp_path, ios_calls, content, message):
+    caps = tmp_path / "caps.json"
+    caps.write_text(content)
+    result = CliRunner().invoke(
+        cli.main,
+        ["run", str(_scenario(tmp_path)), "--platform", "ios", "--capabilities-file", str(caps)],
     )
     assert result.exit_code == 2
-    assert "--app applies only to --platform ios" in result.output
+    assert message in result.output
+    assert ios_calls[0] == []
+
+
+def test_malformed_capability_is_a_usage_error(tmp_path, ios_calls):
+    result = CliRunner().invoke(
+        cli.main, ["run", str(_scenario(tmp_path)), "--platform", "ios", "--capability", "=x"]
+    )
+    assert result.exit_code == 2
+    assert "expected KEY=VALUE" in result.output
 
 
 def test_ios_connection_error_in_a_step_is_blocked_and_closes_the_session(tmp_path, monkeypatch):
