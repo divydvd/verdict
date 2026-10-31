@@ -6,7 +6,8 @@ import tempfile
 import time
 import uuid
 import xml.etree.ElementTree as ET
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -76,6 +77,32 @@ def _selenium_error(name: str) -> type[Exception]:
 
 _NO_SUCH_ELEMENT = _selenium_error("NoSuchElementException")
 _STALE_ELEMENT = _selenium_error("StaleElementReferenceException")
+# Selenium errors that are test results, not connection failures. The driver
+# changes them into `DriverError` (FAILED). `InvalidElementStateException` is
+# also the base of `ElementNotInteractableException`.
+_ELEMENT_ERRORS: tuple[type[Exception], ...] = tuple(
+    _selenium_error(name)
+    for name in (
+        "InvalidElementStateException",
+        "ElementNotInteractableException",
+        "ElementClickInterceptedException",
+        "InvalidSelectorException",
+        "MoveTargetOutOfBoundsException",
+    )
+)
+
+
+@contextmanager
+def _element_errors(what: str) -> Iterator[None]:
+    """Change Selenium element errors into Verdict errors. A missing element
+    gives `ElementNotFoundError`. The other element errors give `DriverError`.
+    All other Selenium errors pass through and give BLOCKED."""
+    try:
+        yield
+    except _NO_SUCH_ELEMENT as exc:
+        raise ElementNotFoundError(f"{what}: {exc}") from exc
+    except _ELEMENT_ERRORS as exc:
+        raise DriverError(f"{what}: {exc}") from exc
 
 
 # Errors that mean the Appium server, WebDriverAgent, or the device connection
@@ -200,12 +227,14 @@ class IosAppiumDriver:
     evidence_dir: Path = field(default_factory=lambda: Path(tempfile.mkdtemp(prefix="verdict-ios-")))
     platform: Platform = field(default=Platform.IOS, init=False)
     sleep: Callable[[float], None] = field(default=time.sleep, repr=False)
+    clock: Callable[[], float] = field(default=time.monotonic, repr=False)
     poll_ms: int = 250
     tap_wait_ms: int = 5000
     dump_attempts: int = 3
 
     _session: AppiumSession = field(init=False, repr=False)
     _active_recording: tuple[RecordingHandle, Path] | None = field(default=None, init=False, repr=False)
+    _syslog: list[dict[str, Any]] = field(default_factory=list, init=False, repr=False)
 
     def __post_init__(self) -> None:
         factory = self.session_factory or self._open_appium_session
@@ -231,8 +260,9 @@ class IosAppiumDriver:
 
     def _find(self, selector: Selector) -> Any | None:
         try:
-            elements = self._session.find_elements(*to_ios_locator(selector))
-        except _NO_SUCH_ELEMENT:
+            with _element_errors(f"lookup of {selector!r}"):
+                elements = self._session.find_elements(*to_ios_locator(selector))
+        except ElementNotFoundError:
             return None
         return elements[0] if elements else None
 
@@ -247,44 +277,50 @@ class IosAppiumDriver:
             if element is None:
                 raise ElementNotFoundError(f"No element matching {selector!r}")
             try:
-                action(element)
+                with _element_errors(f"action on {selector!r}"):
+                    action(element)
                 return
             except _STALE_ELEMENT:
                 continue
         raise ElementNotFoundError(f"Element matching {selector!r} went stale two times")
 
     def _find_with_wait(self, selector: Selector, timeout_ms: int) -> Any | None:
-        if timeout_ms <= 0:
-            return self._find(selector)
-        for _ in range(max(1, timeout_ms // self.poll_ms)):
+        # A zero timeout checks one time. The last check is at the deadline.
+        deadline = self.clock() + max(0, timeout_ms) / 1000
+        while True:
             element = self._find(selector)
             if element is not None:
                 return element
-            self.sleep(self.poll_ms / 1000)
-        return self._find(selector)
+            remaining = deadline - self.clock()
+            if remaining <= 0:
+                return None
+            self.sleep(min(self.poll_ms / 1000, remaining))
 
     def _send_to_focused(self, text: str) -> None:
-        self._session.switch_to.active_element.send_keys(text)
+        with _element_errors("typing into the focused element"):
+            self._session.switch_to.active_element.send_keys(text)
 
     # -- InputDriver -----------------------------------------------------
 
     def tap(self, x: int, y: int) -> None:
-        self._session.execute(
-            _W3C_ACTIONS, _pointer_actions(_move(x, y), _DOWN, _pause(_TAP_HOLD_MS), _UP)
-        )
+        with _element_errors(f"tap at ({x}, {y})"):
+            self._session.execute(
+                _W3C_ACTIONS, _pointer_actions(_move(x, y), _DOWN, _pause(_TAP_HOLD_MS), _UP)
+            )
 
     def tap_selector(self, selector: Selector) -> None:
         self._act_on_element(selector, lambda element: element.click(), self.tap_wait_ms)
 
     def swipe(self, x1: int, y1: int, x2: int, y2: int, duration_ms: int = 300) -> None:
-        self._session.execute(
-            _W3C_ACTIONS, _pointer_actions(_move(x1, y1), _DOWN, _move(x2, y2, duration_ms), _UP)
-        )
+        steps = _pointer_actions(_move(x1, y1), _DOWN, _move(x2, y2, duration_ms), _UP)
+        with _element_errors(f"swipe from ({x1}, {y1}) to ({x2}, {y2})"):
+            self._session.execute(_W3C_ACTIONS, steps)
 
     def scroll(self, direction: Direction, selector: Selector | None = None) -> None:
         if selector is None:
             # Like Android `swipe_ext`: the direction of the finger.
-            self._session.execute_script("mobile: swipe", {"direction": direction.value})
+            with _element_errors(f"swipe {direction.value}"):
+                self._session.execute_script("mobile: swipe", {"direction": direction.value})
             return
         # `mobile: scroll` gives the content to show, so DOWN shows the content
         # below, like Android `scroll.forward`.
@@ -369,9 +405,12 @@ class IosAppiumDriver:
         self.evidence_dir.mkdir(parents=True, exist_ok=True)
         path = self.evidence_dir / f"syslog-{uuid.uuid4().hex}.txt"
         since_ms = since.timestamp() * 1000 if since is not None else None
+        # The XCUITest syslog getter clears its buffer after each read. Keep all
+        # entries read so far, so that a later collection has the full history.
+        self._syslog.extend(self._session.get_log("syslog"))
         lines = [
             f"{entry.get('timestamp', '')} {entry.get('level', '')} {entry.get('message', '')}"
-            for entry in self._session.get_log("syslog")
+            for entry in self._syslog
             if since_ms is None or float(entry.get("timestamp", 0)) >= since_ms
         ]
         path.write_text("\n".join(lines) + ("\n" if lines else ""))

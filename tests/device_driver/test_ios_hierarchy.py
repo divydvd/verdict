@@ -107,3 +107,19 @@ def test_other_types_keep_a_value_equal_to_the_placeholder():
     )
     assert root is not None
     assert root.text == "Type here"
+
+
+def test_text_selector_matches_the_label_like_the_live_locator():
+    hierarchy = parse_ios_hierarchy(FIXTURE_XML)
+    by_label = hierarchy.find(Selector(text="Message"))
+    by_value = hierarchy.find(Selector(text="Hello"))
+    assert by_label is not None and by_label.resource_id == "messageField"
+    assert by_value is not None and by_value.resource_id == "messageField"
+    assert hierarchy.find(Selector(text="Message", resource_id="sendButton")) is None
+    assert hierarchy.find(Selector(text="Nothing")) is None
+
+
+def test_android_nodes_keep_text_only_matching():
+    from verdict.core.models import UiNode
+
+    assert not UiNode(text="Hello", content_desc="Message").matches(Selector(text="Message"))
