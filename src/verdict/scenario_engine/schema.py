@@ -10,7 +10,11 @@ from verdict.core.models import Direction, KeyInput, Platform, Selector, normali
 _PLATFORM_KEYS = frozenset(platform.value for platform in Platform)
 
 
-class MissingPlatformSelectorError(VerdictError):
+class MissingPlatformValueError(VerdictError):
+    """The step has per-platform values, but none for the driver platform."""
+
+
+class MissingPlatformSelectorError(MissingPlatformValueError):
     """The step has per-platform selectors, but none for the driver platform."""
 
 # One entry per action name: the StepSpec fields that must be non-None for
@@ -30,6 +34,7 @@ _REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
     "press_key": ("key",),
     "wait_for": ("selector",),
     "ensure_checked": ("selector", "checked"),
+    "select_keyboard": ("keyboard",),
     "assert": ("assertion",),
 }
 
@@ -82,6 +87,9 @@ class StepSpec(BaseModel):
     key: Annotated[KeyInput, BeforeValidator(normalize_key)] | None = None
     # `ensure_checked` only: the wanted state of a switch or a check box.
     checked: bool | None = None
+    # `select_keyboard` only: the keyboard to select. The plain form applies to
+    # all platforms. The per-platform form is `{android: IME_ID, ios: NAME}`.
+    keyboard: str | dict[Platform, str] | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -111,6 +119,11 @@ class StepSpec(BaseModel):
             raise ValueError("a step can have 'selector' or 'selector_variants', not both")
         if self.selector_variants is not None and not self.selector_variants:
             raise ValueError("'selector_variants' must have at least one platform")
+        if isinstance(self.keyboard, dict) and not self.keyboard:
+            raise ValueError("a per-platform 'keyboard' must have at least one platform")
+        keyboard_names = self.keyboard.values() if isinstance(self.keyboard, dict) else [self.keyboard]
+        if any(name is not None and not name.strip() for name in keyboard_names):
+            raise ValueError("'keyboard' must not be empty")
         missing = [
             field
             for field in required
@@ -124,22 +137,34 @@ class StepSpec(BaseModel):
         return self
 
     def for_platform(self, platform: Platform) -> StepSpec:
-        """Return this step with the selector for `platform` in `selector`.
+        """Return this step with the values for `platform`: the selector in
+        `selector`, and the keyboard name in `keyboard`.
 
-        A step with no per-platform selectors does not change. Raises
+        A step with no per-platform values does not change. Raises
         `MissingPlatformSelectorError` when the step has per-platform
-        selectors, but none for `platform`.
+        selectors, but none for `platform`. Raises `MissingPlatformValueError`
+        when the step has a per-platform keyboard, but none for `platform`.
         """
-        if self.selector_variants is None:
-            return self
-        variant = self.selector_variants.get(platform)
-        if variant is None:
-            given = ", ".join(sorted(p.value for p in self.selector_variants))
-            raise MissingPlatformSelectorError(
-                f"step action '{self.action}' has no selector for platform "
-                f"'{platform.value}' (it has: {given})"
-            )
-        return self.model_copy(update={"selector": variant, "selector_variants": None})
+        update: dict[str, Any] = {}
+        if self.selector_variants is not None:
+            variant = self.selector_variants.get(platform)
+            if variant is None:
+                given = ", ".join(sorted(p.value for p in self.selector_variants))
+                raise MissingPlatformSelectorError(
+                    f"step action '{self.action}' has no selector for platform "
+                    f"'{platform.value}' (it has: {given})"
+                )
+            update.update(selector=variant, selector_variants=None)
+        if isinstance(self.keyboard, dict):
+            keyboard = self.keyboard.get(platform)
+            if keyboard is None:
+                given = ", ".join(sorted(p.value for p in self.keyboard))
+                raise MissingPlatformValueError(
+                    f"step action '{self.action}' has no keyboard for platform "
+                    f"'{platform.value}' (it has: {given})"
+                )
+            update["keyboard"] = keyboard
+        return self.model_copy(update=update) if update else self
 
 
 class RetryPolicy(BaseModel):

@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
-from verdict.core.exceptions import ElementNotFoundError
+from verdict.core.exceptions import DriverError, ElementNotFoundError
 from verdict.core.models import (
     Direction,
     KeyInput,
@@ -47,6 +47,10 @@ class FakeDeviceDriver:
     screenshots_taken: list[Path] = field(default_factory=list, init=False)
     logs_collected: list[Path] = field(default_factory=list, init=False)
     bugreports_collected: list[Path] = field(default_factory=list, init=False)
+    available_keyboards: set[str] | None = None
+    """The keyboards that `select_keyboard` accepts. None accepts all names."""
+    active_keyboard: str | None = None
+    selected_keyboards: list[str] = field(default_factory=list, init=False)
     _active_recording: RecordingHandle | None = field(default=None, init=False, repr=False)
     _recordings_stopped: list[RecordingHandle] = field(default_factory=list, init=False)
 
@@ -83,6 +87,12 @@ class FakeDeviceDriver:
 
     def press_key(self, key: KeyInput) -> None:
         self.pressed_keys.append(normalize_key(key))
+
+    def select_keyboard(self, name: str) -> None:
+        if self.available_keyboards is not None and name not in self.available_keyboards:
+            raise DriverError(f"select_keyboard: no keyboard '{name}'")
+        self.selected_keyboards.append(name)
+        self.active_keyboard = name
 
     def screenshot(self) -> Path:
         self.evidence_dir.mkdir(parents=True, exist_ok=True)

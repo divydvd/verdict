@@ -383,7 +383,7 @@ class DeviceDriver(InputDriver, AppLifecycleDriver, DiagnosticsDriver, Protocol)
   `assert` step is re-checked after a short settle (`settle_ms`, `settle_attempts`), because the
   hierarchy can lag a fast UI transition; the message records the re-checks.
 - `actions/` — built-in reusable step types (`tap`, `type_text`, `type_keys`, `swipe`, `wait_for`,
-  `ensure_checked`, `maestro_flow`) — IME-specific actions live in `domains/ime/actions.py`, not here.
+  `ensure_checked`, `select_keyboard`, `maestro_flow`) — IME-specific actions live in `domains/ime/actions.py`, not here.
 - `ensure_checked` sets a switch or a check box to a known state:
 
   ```yaml
@@ -397,6 +397,20 @@ class DeviceDriver(InputDriver, AppLifecycleDriver, DiagnosticsDriver, Protocol)
   when the state differs, then reads the state again with the `settle_ms` re-checks. After the
   tap, a missing node is read again in the same re-checks, because the screen can redraw. The
   step fails when the state does not change, or when no matched node or ancestor is checkable.
+- `select_keyboard` makes a keyboard the active keyboard (ADR-0010):
+
+  ```yaml
+  - action: select_keyboard
+    keyboard:
+      android: "bha.keys.smartype.debug/bha.keys.smartype.FlorisImeService"
+      ios: "SmarType"
+    selector: {resource_id: "keyboard_view"}
+  ```
+
+  The driver selects the keyboard and checks that it is active, or the step fails. Android uses
+  `ime set` with the IME id. iOS uses a long press on the globe key and a tap on the name in the
+  list. With a `selector`, the step then waits up to `timeout_ms` for that element. `keyboard`
+  also has a plain form (`keyboard: "Emoji"`) for all platforms.
 - Per-platform selectors (ADR-0009). Element ids can be different on Android and iOS. A step can
   give one selector for each platform:
 

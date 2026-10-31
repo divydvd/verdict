@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import http.client
+import shlex
 import tempfile
 import time
 import uuid
@@ -48,6 +49,14 @@ CONNECTION_ERRORS: tuple[type[BaseException], ...] = (
     u2.exceptions.DeviceError,
     adbutils.AdbError,
 )
+
+
+def _expand_ime_id(ime_id: str) -> str:
+    """Write an IME id in its long form: `pkg/.Service` becomes `pkg/pkg.Service`."""
+    package, sep, service = ime_id.strip().partition("/")
+    if sep and service.startswith("."):
+        return f"{package}/{package}{service}"
+    return ime_id.strip()
 
 
 def _to_u2_kwargs(selector: Selector) -> dict[str, str]:
@@ -204,6 +213,30 @@ class AndroidUiautomator2Driver:
 
     def wait_for(self, selector: Selector, timeout_ms: int) -> bool:
         return bool(self._ui_object(selector).wait(timeout=timeout_ms / 1000))
+
+    # -- KeyboardDriver ----------------------------------------------------
+
+    def select_keyboard(self, name: str) -> None:
+        """Select the input method `name` with `ime set`, then check it. See ADR-0010.
+
+        `name` is an IME id, for example
+        `bha.keys.smartype.debug/bha.keys.smartype.FlorisImeService`. The
+        input method must be on (`ime list -s`). The driver does not turn it on.
+        """
+        wanted = _expand_ime_id(name)
+        enabled = [_expand_ime_id(ime) for ime in str(self._adb.shell("ime list -s")).split()]
+        if wanted not in enabled:
+            raise DriverError(
+                f"select_keyboard: the input method '{name}' is not on. The input methods "
+                f"that are on: {', '.join(enabled) or '(none)'}. Turn it on with "
+                f"`adb shell ime enable {wanted}` or in Settings."
+            )
+        self._adb.shell(f"ime set {shlex.quote(wanted)}")
+        active = _expand_ime_id(str(self._adb.shell("settings get secure default_input_method")))
+        if active != wanted:
+            raise DriverError(
+                f"select_keyboard: `ime set {wanted}` ran, but the active input method is '{active}'"
+            )
 
     # -- AppLifecycleDriver ------------------------------------------------
 

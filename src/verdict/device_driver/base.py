@@ -93,6 +93,23 @@ class DiagnosticsDriver(Protocol):
 
 
 @runtime_checkable
+class KeyboardDriver(Protocol):
+    """Selects the active on-screen keyboard. An optional capability: it is
+    not part of `DeviceDriver`. See docs/adr/0010-keyboard-selection-capability.md.
+    """
+
+    def select_keyboard(self, name: str) -> None:
+        """Make the keyboard `name` the active keyboard, then check it.
+
+        `name` is platform-specific: the IME id on Android
+        (`package/.Service`), and the name in the globe-key list on iOS.
+        Raises `DriverError` (or `ElementNotFoundError`) when the keyboard
+        is not available or does not become active.
+        """
+        ...
+
+
+@runtime_checkable
 class DeviceDriver(InputDriver, AppLifecycleDriver, DiagnosticsDriver, Protocol):
     """Composition of all three capability protocols. Android's
     implementation satisfies this in full; other platforms may implement
