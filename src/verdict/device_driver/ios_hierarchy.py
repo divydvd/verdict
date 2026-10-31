@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import xml.etree.ElementTree as ET
 
-from verdict.core.models import UiHierarchy, UiNode
+from verdict.core.models import Selector, UiHierarchy, UiNode
 
 # The root element of an Appium XCUITest page source.
 _APPIUM_ROOT_TAG = "AppiumAUT"
@@ -17,6 +17,16 @@ TEXT_INPUT_TYPES = frozenset({
     "XCUIElementTypeSearchField",
     "XCUIElementTypeTextView",
 })
+
+
+class IosUiNode(UiNode):
+    """A `UiNode` from an XCUITest page source. A `text` selector matches the
+    text or the label, like the live locator (`label OR value`)."""
+
+    def matches(self, selector: Selector) -> bool:
+        if selector.text is None or selector.text not in (self.text, self.content_desc):
+            return super().matches(selector)
+        return super().matches(selector.model_copy(update={"text": None}))
 
 
 def _int_attr(attrib: dict[str, str], name: str) -> int | None:
@@ -48,11 +58,13 @@ def _node_from_element(element: ET.Element) -> UiNode:
         # The value of a switch is its state, not its text. Use the label as the text.
         text = label
     elif class_name in TEXT_INPUT_TYPES and value is not None and value == attrib.get("placeholderValue"):
-        # An empty text field reports its placeholder as its value.
+        # An empty text field reports its placeholder as its value. When the
+        # typed text equals the placeholder, the parser cannot tell the two
+        # apart and gives an empty text. A false FAIL is safer than a false PASS.
         text = ""
     else:
         text = value or label
-    return UiNode(
+    return IosUiNode(
         resource_id=attrib.get("name") or None,
         text=text,
         content_desc=label,
@@ -70,7 +82,10 @@ def parse_ios_hierarchy_xml(raw_xml: str) -> UiNode | None:
     The attributes map as follows: `name` to `resource_id`, `label` to
     `content_desc`, `value` (or else `label`) to `text`, `type` to
     `class_name`, and `x`, `y`, `width`, `height` to `bounds`. An empty text
-    field (its `value` is its `placeholderValue`) has an empty text. A switch is
+    field (its `value` is its `placeholderValue`) has an empty text. If the
+    typed text equals the placeholder, the parser cannot tell, and also gives
+    an empty text. A false FAIL is safer than a false PASS. A `text` selector
+    matches the text or the label (`content_desc`), like the live locator. A switch is
     checkable. Its `value` "1" means checked. Returns None when the page
     source has no element.
 
@@ -86,7 +101,7 @@ def parse_ios_hierarchy_xml(raw_xml: str) -> UiNode | None:
         return None
     if len(children) == 1:
         return children[0]
-    return UiNode(class_name="hierarchy", children=children)
+    return IosUiNode(class_name="hierarchy", children=children)
 
 
 def parse_ios_hierarchy(raw_xml: str) -> UiHierarchy:

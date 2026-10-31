@@ -334,3 +334,120 @@ def test_stale_element_in_scroll_is_found_again(tmp_path):
     session.execute_script = script
     driver.scroll(Direction.DOWN, Selector(resource_id="list"))
     assert session.calls[-1] == ("script", "mobile: scroll", {"direction": "down", "elementId": "el-9"})
+
+
+def test_wait_checks_again_at_the_deadline(tmp_path):
+    sleeps: list[float] = []
+    driver, session = make_driver(tmp_path, sleep=sleeps.append, poll_ms=250)
+    session.add_element(BY_ACCESSIBILITY_ID, "late")
+    session.missing_reads = 2
+    assert driver.wait_for(Selector(resource_id="late"), timeout_ms=350)
+    assert sleeps == pytest.approx([0.25, 0.1])
+
+
+def test_zero_timeout_checks_one_time_and_does_not_sleep(tmp_path):
+    sleeps: list[float] = []
+    driver, session = make_driver(tmp_path, sleep=sleeps.append)
+    assert not driver.wait_for(Selector(resource_id="missing"), timeout_ms=0)
+    assert sleeps == []
+    assert [call[0] for call in session.calls].count("find") == 1
+
+
+def test_collect_logs_keeps_entries_from_earlier_reads(tmp_path):
+    driver, session = make_driver(tmp_path)
+    session.syslog = [{"timestamp": 1, "level": "ALL", "message": "first"}]
+    assert "first" in driver.collect_logs().read_text()
+    session.syslog = [{"timestamp": 2, "level": "ALL", "message": "second"}]
+    assert driver.collect_logs().read_text() == "1 ALL first\n2 ALL second\n"
+    assert driver.collect_logs(datetime.fromtimestamp(0.002, UTC)).read_text() == "2 ALL second\n"
+
+
+def _selenium(name):
+    from selenium.common import exceptions
+
+    return getattr(exceptions, name)
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "InvalidElementStateException",
+        "ElementNotInteractableException",
+        "ElementClickInterceptedException",
+        "MoveTargetOutOfBoundsException",
+    ],
+)
+def test_element_errors_in_tap_selector_are_driver_errors(tmp_path, name):
+    driver, session = make_driver(tmp_path)
+    element = session.add_element(BY_ACCESSIBILITY_ID, "sendButton")
+    element.click = lambda: (_ for _ in ()).throw(_selenium(name)("no"))
+    with pytest.raises(DriverError) as info:
+        driver.tap_selector(Selector(resource_id="sendButton"))
+    assert not isinstance(info.value, IOS_CONNECTION_ERRORS)
+
+
+def test_no_such_element_in_an_action_is_element_not_found(tmp_path):
+    driver, session = make_driver(tmp_path)
+    element = session.add_element(BY_ACCESSIBILITY_ID, "sendButton")
+    element.click = lambda: (_ for _ in ()).throw(_selenium("NoSuchElementException")("gone"))
+    with pytest.raises(ElementNotFoundError):
+        driver.tap_selector(Selector(resource_id="sendButton"))
+
+
+def test_invalid_selector_in_lookup_is_a_driver_error(tmp_path):
+    driver, session = make_driver(tmp_path)
+    session.find_error = _selenium("InvalidSelectorException")("bad predicate")
+    with pytest.raises(DriverError) as info:
+        driver.wait_for(Selector(text="x"), timeout_ms=0)
+    assert not isinstance(info.value, IOS_CONNECTION_ERRORS)
+
+
+def test_element_error_in_scroll_with_selector_is_a_driver_error(tmp_path):
+    driver, session = make_driver(tmp_path)
+    session.add_element(BY_ACCESSIBILITY_ID, "list")
+
+    def script(name, *args):
+        raise _selenium("InvalidElementStateException")("not scrollable")
+
+    session.execute_script = script
+    with pytest.raises(DriverError):
+        driver.scroll(Direction.DOWN, Selector(resource_id="list"))
+
+
+@pytest.mark.parametrize("method", ["type_text", "type_keys"])
+def test_element_errors_in_typing_are_driver_errors(tmp_path, method):
+    driver, session = make_driver(tmp_path)
+    error = _selenium("ElementNotInteractableException")("keyboard hidden")
+    session.switch_to.active_element.send_keys = lambda text: (_ for _ in ()).throw(error)
+    with pytest.raises(DriverError):
+        getattr(driver, method)("ab")
+
+
+def test_no_focused_element_is_element_not_found(tmp_path):
+    driver, session = make_driver(tmp_path)
+    error = _selenium("NoSuchElementException")("no focus")
+    session.switch_to.active_element.send_keys = lambda text: (_ for _ in ()).throw(error)
+    with pytest.raises(ElementNotFoundError):
+        driver.press_key(KeyEvent.ENTER)
+
+
+def test_out_of_bounds_tap_is_a_driver_error(tmp_path):
+    driver, session = make_driver(tmp_path)
+
+    def execute(command, params=None):
+        raise _selenium("MoveTargetOutOfBoundsException")("outside")
+
+    session.execute = execute
+    with pytest.raises(DriverError):
+        driver.tap(9999, 9999)
+    with pytest.raises(DriverError):
+        driver.swipe(0, 0, 9999, 9999)
+
+
+def test_other_webdriver_errors_pass_through_as_blocked(tmp_path):
+    driver, session = make_driver(tmp_path)
+    error = _selenium("WebDriverException")("WDA crashed")
+    session.switch_to.active_element.send_keys = lambda text: (_ for _ in ()).throw(error)
+    with pytest.raises(IOS_CONNECTION_ERRORS) as info:
+        driver.type_text("a")
+    assert not isinstance(info.value, DriverError)
