@@ -2,8 +2,8 @@
 
 Each check starts host tools through an injectable `CommandRunner`, so the
 tests need no Xcode, Appium, or device. The external commands are:
-`xcode-select`, `xcodebuild`, `appium`, `xcrun devicectl`, `xcrun simctl`,
-and `idevice_id`. The Appium check also sends one HTTP GET to `/status`.
+`xcode-select`, `xcodebuild`, `appium`, `ffmpeg`, `xcrun devicectl`,
+`xcrun simctl`, and `idevice_id`. The Appium check also sends one HTTP GET to `/status`.
 """
 
 from __future__ import annotations
@@ -28,6 +28,10 @@ _XCODE_SELECT_FIX = (
     "Install Xcode from the App Store. Then run: "
     "sudo xcode-select -s /Applications/Xcode.app/Contents/Developer"
 )
+_DEVELOPER_MODE_FIX = (
+    "On the iPhone, turn on Settings > Privacy & Security > Developer Mode, then restart it"
+)
+_WDA_SIGNING_KEYS = ("xcodeOrgId", "updatedWDABundleId", "usePreinstalledWDA")
 _DEVICE_FIX = (
     "Connect the iPhone with a cable and trust this Mac, "
     "or boot a Simulator: xcrun simctl boot <UDID>"
@@ -80,6 +84,7 @@ def ios_extra_installed(import_module: ModuleImporter = importlib.import_module)
 
 class CheckStatus(str, Enum):
     OK = "OK"
+    INFO = "INFO"
     WARN = "WARN"
     FAIL = "FAIL"
 
@@ -177,7 +182,34 @@ def check_appium_server(appium_url: str, http_get: HttpGet) -> Check:
     return Check("appium server", CheckStatus.OK, f"answers at {url}")
 
 
-def _devicectl_devices(runner: CommandRunner) -> dict[str, str] | None:
+@dataclass(frozen=True)
+class IosDevice:
+    udid: str
+    name: str
+    simulator: bool = False
+    developer_mode: str | None = None
+    """`enabled` or `disabled` from devicectl. None when devicectl does not report it."""
+
+
+def devicectl_device_connected(device: dict[str, Any]) -> bool:
+    """Return True if a `devicectl list devices` entry is connected now.
+
+    The field names and values come from Apple and Appium documentation. They
+    are not checked against real devicectl output, because this Mac has no
+    Xcode. A paired device that is not connected must not count.
+    """
+    connection = device.get("connectionProperties", {})
+    tunnel = connection.get("tunnelState")
+    if tunnel == "connected":
+        return True
+    return (
+        connection.get("pairingState") == "paired"
+        and bool(connection.get("transportType"))
+        and tunnel not in ("disconnected", "unavailable")
+    )
+
+
+def _devicectl_devices(runner: CommandRunner) -> list[IosDevice] | None:
     with tempfile.TemporaryDirectory(prefix="verdict-doctor-") as folder:
         output = Path(folder) / "devices.json"
         result = _run(
@@ -189,54 +221,150 @@ def _devicectl_devices(runner: CommandRunner) -> dict[str, str] | None:
             data: Any = json.loads(output.read_text())
         except (OSError, ValueError):
             return None
-    devices: dict[str, str] = {}
+    devices: list[IosDevice] = []
     for device in data.get("result", {}).get("devices", []):
         udid = device.get("hardwareProperties", {}).get("udid")
-        if not udid or device.get("connectionProperties", {}).get("tunnelState") == "unavailable":
+        if not udid or not devicectl_device_connected(device):
             continue
-        devices[udid] = device.get("deviceProperties", {}).get("name", "iPhone")
+        properties = device.get("deviceProperties", {})
+        devices.append(
+            IosDevice(
+                udid=udid,
+                name=properties.get("name", "iPhone"),
+                developer_mode=properties.get("developerModeStatus"),
+            )
+        )
     return devices
 
 
-def _idevice_devices(runner: CommandRunner) -> dict[str, str] | None:
+def _idevice_devices(runner: CommandRunner) -> list[IosDevice] | None:
     result = _run(runner, ["idevice_id", "-l"])
     if result is None or result.returncode != 0:
         return None
-    return {line.strip(): "iPhone" for line in result.stdout.splitlines() if line.strip()}
+    return [IosDevice(line.strip(), "iPhone") for line in result.stdout.splitlines() if line.strip()]
 
 
-def _booted_simulators(runner: CommandRunner) -> dict[str, str]:
+def _booted_simulators(runner: CommandRunner) -> list[IosDevice]:
     result = _run(runner, ["xcrun", "simctl", "list", "devices", "booted", "-j"])
     if result is None or result.returncode != 0:
-        return {}
+        return []
     try:
         data: Any = json.loads(result.stdout)
     except ValueError:
-        return {}
-    return {
-        sim["udid"]: f"{sim.get('name', 'Simulator')} (Simulator)"
+        return []
+    return [
+        IosDevice(sim["udid"], f"{sim.get('name', 'Simulator')} (Simulator)", simulator=True)
         for sims in data.get("devices", {}).values()
         for sim in sims
         if sim.get("udid") and sim.get("state") == "Booted"
-    }
+    ]
 
 
-def check_device(runner: CommandRunner, device: str | None) -> Check:
+def find_devices(runner: CommandRunner) -> list[IosDevice]:
+    """Return the connected iPhones and the booted Simulators."""
     real = _devicectl_devices(runner)
     if real is None:
-        real = _idevice_devices(runner) or {}
-    found = {**real, **_booted_simulators(runner)}
-    listed = ", ".join(f"{name} {udid}" for udid, name in found.items())
+        real = _idevice_devices(runner) or []
+    return [*real, *_booted_simulators(runner)]
+
+
+def check_device(devices: Sequence[IosDevice], device: str | None) -> Check:
+    listed = ", ".join(f"{found.name} {found.udid}" for found in devices)
     if device is not None:
-        if device in found:
-            return Check("device", CheckStatus.OK, f"{found[device]} {device}")
-        seen = f"; found: {listed}" if found else "; found no device"
+        match = next((found for found in devices if found.udid == device), None)
+        if match is not None:
+            return Check("device", CheckStatus.OK, f"{match.name} {device}")
+        seen = f"; found: {listed}" if devices else "; found no device"
         return Check("device", CheckStatus.FAIL, f"{device} is not connected or booted{seen}", _DEVICE_FIX)
-    if not found:
+    if not devices:
         return Check(
             "device", CheckStatus.FAIL, "found no iPhone and no booted Simulator", _DEVICE_FIX
         )
     return Check("device", CheckStatus.OK, listed)
+
+
+def _targets(devices: Sequence[IosDevice], device: str | None) -> list[IosDevice]:
+    return [found for found in devices if device is None or found.udid == device]
+
+
+def _no_real_device(name: str, targets: Sequence[IosDevice]) -> Check:
+    if targets:
+        return Check(name, CheckStatus.OK, "not necessary for a Simulator")
+    return Check(name, CheckStatus.WARN, "found no iPhone to check", _DEVICE_FIX)
+
+
+def check_developer_mode(devices: Sequence[IosDevice], device: str | None) -> list[Check]:
+    targets = _targets(devices, device)
+    real = [found for found in targets if not found.simulator]
+    if not real:
+        return [_no_real_device("developer mode", targets)]
+    checks = []
+    for found in real:
+        label = f"{found.name} {found.udid}"
+        if found.developer_mode == "enabled":
+            checks.append(Check("developer mode", CheckStatus.OK, f"enabled on {label}"))
+        elif found.developer_mode == "disabled":
+            checks.append(
+                Check(
+                    "developer mode",
+                    CheckStatus.FAIL,
+                    f"disabled on {label}",
+                    _DEVELOPER_MODE_FIX,
+                )
+            )
+        else:
+            checks.append(
+                Check(
+                    "developer mode",
+                    CheckStatus.WARN,
+                    f"devicectl did not report it for {label}",
+                    _DEVELOPER_MODE_FIX,
+                )
+            )
+    return checks
+
+
+def _given(capabilities: dict[str, Any], key: str) -> bool:
+    return any(capabilities.get(name) not in (None, "", False) for name in (key, f"appium:{key}"))
+
+
+def check_wda_signing(
+    devices: Sequence[IosDevice], device: str | None, capabilities: dict[str, Any]
+) -> Check:
+    targets = _targets(devices, device)
+    if all(found.simulator for found in targets):
+        return _no_real_device("wda signing", targets)
+    given = [key for key in _WDA_SIGNING_KEYS if _given(capabilities, key)]
+    if given:
+        return Check("wda signing", CheckStatus.OK, f"given: appium:{', appium:'.join(given)}")
+    return Check(
+        "wda signing",
+        CheckStatus.WARN,
+        "no appium:xcodeOrgId, appium:updatedWDABundleId, or appium:usePreinstalledWDA is given",
+        "Give your Apple team id: --capability appium:xcodeOrgId=TEAMID "
+        '--capability "appium:xcodeSigningId=Apple Development"',
+    )
+
+
+def check_ffmpeg(runner: CommandRunner) -> Check:
+    result = _run(runner, ["ffmpeg", "-version"])
+    if result is None or result.returncode != 0:
+        return Check(
+            "ffmpeg",
+            CheckStatus.WARN,
+            "ffmpeg is not on PATH; screen recording on a real iPhone needs it",
+            "brew install ffmpeg",
+        )
+    return Check("ffmpeg", CheckStatus.OK, _first_line(result.stdout))
+
+
+def check_ui_automation() -> Check:
+    return Check(
+        "ui automation",
+        CheckStatus.INFO,
+        "Verdict cannot read this setting",
+        "On the iPhone, turn on Settings > Developer > Enable UI Automation",
+    )
 
 
 def check_ios_extra(import_module: ModuleImporter) -> Check:
@@ -250,20 +378,26 @@ def check_ios_extra(import_module: ModuleImporter) -> Check:
 def run_ios_doctor(
     device: str | None,
     appium_url: str,
+    capabilities: dict[str, Any] | None = None,
     runner: CommandRunner = subprocess_runner,
     http_get: HttpGet = urllib_get,
     import_module: ModuleImporter = importlib.import_module,
 ) -> list[Check]:
     """Run all iOS readiness checks and return one `Check` for each."""
+    devices = find_devices(runner)
     return [
         check_xcode(runner),
         *check_appium(runner),
         check_appium_server(appium_url, http_get),
-        check_device(runner, device),
+        check_ffmpeg(runner),
+        check_device(devices, device),
+        *check_developer_mode(devices, device),
+        check_wda_signing(devices, device, capabilities or {}),
+        check_ui_automation(),
         check_ios_extra(import_module),
     ]
 
 
 def doctor_passed(checks: Sequence[Check]) -> bool:
-    """Return True if no required check failed. A WARN does not stop a run."""
+    """Return True if no required check failed. A WARN or an INFO does not stop a run."""
     return all(check.status is not CheckStatus.FAIL for check in checks)

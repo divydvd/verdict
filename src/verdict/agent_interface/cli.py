@@ -192,14 +192,14 @@ def _capability_options(func: _F) -> _F:
         "--capabilities-file",
         type=click.Path(exists=True, dir_okay=False, path_type=Path),
         default=None,
-        help="iOS only: a JSON object of Appium capabilities.",
+        help="A JSON object of Appium capabilities (iOS only).",
     )(func)
     func = click.option(
         "--capability",
         "capability_pairs",
         multiple=True,
         metavar="KEY=VALUE",
-        help="iOS only: an Appium capability, for example appium:xcodeOrgId=TEAMID. "
+        help="An Appium capability (iOS only), for example appium:xcodeOrgId=TEAMID. "
         "A JSON value (true, 8100) is parsed. It overrides --capabilities-file. "
         "May be passed multiple times.",
     )(func)
@@ -336,14 +336,25 @@ def doctor() -> None:
     show_default=True,
     help="The URL of the Appium server.",
 )
-def doctor_ios(device: str | None, appium_url: str) -> None:
-    """Check Xcode, Appium, the XCUITest driver, the device, and the `ios` extra.
+@_capability_options
+def doctor_ios(
+    device: str | None,
+    appium_url: str,
+    capability_pairs: tuple[str, ...],
+    capabilities_file: Path | None,
+) -> None:
+    """Check that this Mac and the device are ready for iOS tests.
 
-    Each check prints one line: OK, WARN, or FAIL. Each WARN and FAIL also
-    prints a fix. Exit 0: no required check failed. Exit 2: a required check
-    failed.
+    The checks: Xcode, Appium, the XCUITest driver, the Appium server, ffmpeg,
+    the device, Developer Mode, WDA signing, and the `ios` extra. Give the
+    same capabilities as to `verdict run`, so the WDA signing check can read them.
+
+    Each check prints one line: OK, INFO, WARN, or FAIL. Each INFO, WARN, and
+    FAIL also prints a fix. Exit 0: no required check failed. Exit 2: a
+    required check failed. A WARN does not change the exit code.
     """
-    checks = run_ios_doctor(device, appium_url)
+    capabilities = load_capabilities(capabilities_file, capability_pairs)
+    checks = run_ios_doctor(device, appium_url, capabilities)
     for check in checks:
         click.echo(f"{check.status.value:<4} {check.name}: {check.detail}")
         if check.fix:

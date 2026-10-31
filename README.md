@@ -68,14 +68,19 @@ Verdict runs iOS scenarios through an Appium server with the XCUITest driver (se
 Check that the Mac is ready:
 
 ```bash
-verdict doctor ios [--device UDID] [--appium-url http://127.0.0.1:4723]
+verdict doctor ios [--device UDID] [--appium-url http://127.0.0.1:4723] \
+  [--capability KEY=VALUE ...] [--capabilities-file PATH]
 ```
 
-- It checks Xcode, `appium`, the `xcuitest` driver, the Appium server, the iPhone or booted
-  Simulator, and the iOS extra.
-- It prints one line for each check (`OK`, `WARN`, or `FAIL`) and a fix for each problem.
-- Exit 0: no required check failed. Exit 2: a required check failed. A server that does not
-  answer is only a `WARN`.
+- It checks Xcode, `appium`, the `xcuitest` driver, the Appium server, `ffmpeg`, the iPhone or
+  booted Simulator, Developer Mode, WDA signing, and the iOS extra.
+- Give it the same capabilities as `verdict run`. Then the WDA signing check can read
+  `appium:xcodeOrgId`, `appium:updatedWDABundleId`, or `appium:usePreinstalledWDA`.
+- It cannot read the UI Automation setting. It prints an `INFO` line: turn on
+  Settings > Developer > Enable UI Automation on the iPhone.
+- It prints one line for each check (`OK`, `INFO`, `WARN`, or `FAIL`) and a fix for each problem.
+- Exit 0: no required check failed. Exit 2: a required check failed. A `WARN` does not change
+  the exit code.
 
 Run a scenario on iOS:
 
