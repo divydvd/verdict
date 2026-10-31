@@ -16,7 +16,14 @@ class FakeElement:
         self.calls = calls
         self.id = element_id
 
+        self.stale_clicks = 0
+
     def click(self) -> None:
+        if self.stale_clicks > 0:
+            self.stale_clicks -= 1
+            from selenium.common.exceptions import StaleElementReferenceException
+
+            raise StaleElementReferenceException("stale")
         self.calls.append(("click", self.id))
 
     def send_keys(self, text: str) -> None:
@@ -37,6 +44,7 @@ class FakeAppiumSession:
         self.syslog: list[dict[str, Any]] = []
         self.recording = b"fake-mp4"
         self.switch_to = _SwitchTo(self.calls)
+        self.find_error: Exception | None = None
 
     @property
     def page_source(self) -> str:
@@ -59,6 +67,8 @@ class FakeAppiumSession:
 
     def find_elements(self, by: str, value: str | None = None) -> list[Any]:
         self.calls.append(("find", by, value))
+        if self.find_error is not None:
+            raise self.find_error
         if self.missing_reads > 0:
             self.missing_reads -= 1
             return []
