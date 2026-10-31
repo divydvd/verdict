@@ -36,6 +36,7 @@ _DEVICE_FIX = (
     "Connect the iPhone with a cable and trust this Mac, "
     "or boot a Simulator: xcrun simctl boot <UDID>"
 )
+_WIFI_FIX = "Connect the iPhone with a USB cable, unlock it, and run the doctor again"
 
 
 class IosExtraMissingError(VerdictError):
@@ -218,6 +219,8 @@ class IosDevice:
     simulator: bool = False
     developer_mode: str | None = None
     """`enabled` or `disabled` from devicectl. None when devicectl does not report it."""
+    wifi_only: bool = False
+    """True when devicectl sees the iPhone only over Wi-Fi. Appium cannot use it then."""
 
 
 def devicectl_device_connected(device: dict[str, Any]) -> bool:
@@ -262,11 +265,13 @@ def _devicectl_devices(runner: CommandRunner) -> list[IosDevice] | None:
         if not udid or not devicectl_device_connected(device):
             continue
         properties = device.get("deviceProperties", {})
+        transport = device.get("connectionProperties", {}).get("transportType")
         devices.append(
             IosDevice(
                 udid=udid,
                 name=properties.get("name", "iPhone"),
                 developer_mode=properties.get("developerModeStatus"),
+                wifi_only=transport == "localNetwork",
             )
         )
     return devices
@@ -303,11 +308,23 @@ def find_devices(runner: CommandRunner) -> list[IosDevice]:
     return [*real, *_booted_simulators(runner)]
 
 
+def _wifi_only_check(found: Sequence[IosDevice]) -> Check:
+    names = ", ".join(f"{device.name} {device.udid}" for device in found)
+    return Check(
+        "device",
+        CheckStatus.FAIL,
+        f"connected over Wi-Fi only: {names}. Appium cannot use an iPhone over Wi-Fi",
+        _WIFI_FIX,
+    )
+
+
 def check_device(devices: Sequence[IosDevice], device: str | None) -> Check:
     listed = ", ".join(f"{found.name} {found.udid}" for found in devices)
     if device is not None:
         match = next((found for found in devices if found.udid == device), None)
         if match is not None:
+            if match.wifi_only:
+                return _wifi_only_check([match])
             return Check("device", CheckStatus.OK, f"{match.name} {device}")
         seen = f"; found: {listed}" if devices else "; found no device"
         return Check("device", CheckStatus.FAIL, f"{device} is not connected or booted{seen}", _DEVICE_FIX)
@@ -315,7 +332,10 @@ def check_device(devices: Sequence[IosDevice], device: str | None) -> Check:
         return Check(
             "device", CheckStatus.FAIL, "found no iPhone and no booted Simulator", _DEVICE_FIX
         )
-    return Check("device", CheckStatus.OK, listed)
+    if all(found.wifi_only for found in devices):
+        return _wifi_only_check(devices)
+    usable = ", ".join(f"{found.name} {found.udid}" for found in devices if not found.wifi_only)
+    return Check("device", CheckStatus.OK, usable)
 
 
 def _targets(devices: Sequence[IosDevice], device: str | None) -> list[IosDevice]:
