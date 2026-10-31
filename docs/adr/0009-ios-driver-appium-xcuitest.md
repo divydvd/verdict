@@ -58,7 +58,13 @@ each platform:
 - Verdict reuses a maintained, widely used project for iOS UI automation. It does not write
   its own iPhone control layer.
 - The decision agrees with the frozen architecture (§4, §10). ADR-0002 stays valid.
-- The scenario engine, assertions, evidence, and reports do not change (ADR-0005).
+- The assertions and the evidence do not change (ADR-0005). The other layers get only small
+  additions:
+  - **Scenario schema:** per-platform selectors (`selector_variants`, `for_platform`) and an
+    optional `ScenarioSpec.platforms` field.
+  - **Runner:** a SKIPPED status for a scenario that does not support the device platform.
+  - **Reports:** the `skipped` and `skip_reason` fields, and the SKIPPED status in Markdown and
+    HTML.
 - Android users get no new dependency, because the Appium client is an optional extra.
 
 **Negative (known limits on iOS):**
