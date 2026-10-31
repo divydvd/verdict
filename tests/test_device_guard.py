@@ -525,3 +525,131 @@ def test_tool_names_ignore_the_case(command):
 def test_ios_deploy_iproxy_and_simctl_are_blocked(command):
     with pytest.raises(RealDeviceAccessError):
         subprocess.run(command, shell=isinstance(command, str), check=False)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        ["ios list"],
+        ("ios list",),
+        ["true", "ios list"],
+        ["echo start; ios list"],
+        ("{ ios list; }",),
+        ["XCRUN simctl list"],
+    ],
+    ids=["list", "tuple", "second-item", "separator", "brace-tuple", "tool-case"],
+)
+def test_shell_true_checks_each_item_as_shell_text(fake_ios_tools, command):
+    with pytest.raises(RealDeviceAccessError):
+        subprocess.run(command, shell=True, check=False, capture_output=True)
+    assert list(fake_ios_tools.iterdir()) == []
+
+
+@pytest.mark.parametrize(
+    ("argv", "executable"),
+    [
+        (["alias", "-c", 'echo "$(ios list)"'], "/bin/sh"),
+        (["alias", "-ec", "ios list"], "/bin/sh"),
+        (["true", "list"], "ios"),
+        (["true", "devices"], "/usr/bin/adb"),
+    ],
+    ids=["sh-c", "sh-ec", "ios", "adb-path"],
+)
+def test_popen_checks_the_executable_argument(fake_ios_tools, argv, executable):
+    with pytest.raises(RealDeviceAccessError):
+        subprocess.run(argv, executable=executable, check=False, capture_output=True)
+    assert list(fake_ios_tools.iterdir()) == []
+
+
+def test_popen_with_a_harmless_executable_still_runs():
+    result = subprocess.run(
+        ["alias", "-c", "echo ok"], executable="/bin/sh", capture_output=True, check=True
+    )
+    assert result.stdout == b"ok\n"
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda env: os.posix_spawn("/bin/sh", ["alias", "-c", 'echo "$(ios list)"'], env),
+        lambda env: os.posix_spawnp("sh", ["alias", "-c", "ios list"], env),
+        lambda env: os.posix_spawnp("ios", ["true", "list"], env),
+        lambda env: os.spawnv(os.P_WAIT, "/bin/sh", ["alias", "-c", "ios list"]),
+        lambda env: os.spawnve(os.P_WAIT, "/bin/sh", ["alias", "-c", "ios list"], env),
+        lambda env: os.spawnl(os.P_WAIT, "/bin/sh", "alias", "-c", "ios list"),
+        lambda env: os.spawnlpe(os.P_WAIT, "sh", "alias", "-c", "ios list", env),
+        lambda env: os.spawnvp(os.P_WAIT, "ios", ["true", "list"]),
+    ],
+    ids=["posix_spawn", "posix_spawnp", "posix_spawnp-ios", "spawnv", "spawnve", "spawnl",
+         "spawnlpe", "spawnvp-ios"],
+)
+def test_os_spawn_checks_the_program_path_with_the_arguments(fake_ios_tools, call):
+    with pytest.raises(RealDeviceAccessError):
+        call(dict(os.environ))
+    assert list(fake_ios_tools.iterdir()) == []
+
+
+@pytest.mark.parametrize(
+    ("name", "args"),
+    [
+        ("execv", ("/bin/sh", ["alias", "-c", "ios list"])),
+        ("execve", ("/bin/sh", ["alias", "-c", "ios list"], {})),
+        ("execvp", ("ios", ["true", "list"])),
+        ("execvpe", ("sh", ["alias", "-ec", "ios list"], {})),
+        ("execl", ("/bin/sh", "alias", "-c", "ios list")),
+        ("execle", ("/bin/sh", "alias", "-c", "ios list", {})),
+        ("execlp", ("ios", "true", "list")),
+        ("execlpe", ("sh", "alias", "-c", "ios list", {})),
+    ],
+)
+def test_os_exec_checks_the_program_path_with_the_arguments(name, args):
+    # A real os.exec* call would replace this process, so a fake original takes its place.
+    calls = []
+
+    def original(*call_args):
+        calls.append(call_args)
+
+    original.__name__ = name
+    with pytest.raises(RealDeviceAccessError):
+        guard._guard_function(original)(*args)
+    assert calls == []
+
+
+def test_os_exec_wrapper_passes_a_harmless_call_through():
+    calls = []
+
+    def execv(*call_args):
+        calls.append(call_args)
+
+    guard._guard_function(execv)("/bin/sh", iter(["alias", "-c", "echo ok"]))
+    assert calls == [("/bin/sh", ["alias", "-c", "echo ok"])]
+
+
+@pytest.mark.parametrize(
+    "host",
+    [
+        "127.1",
+        "127.0.1",
+        "2130706433",
+        "0x7f000001",
+        "0x7f.1",
+        "017700000001",
+        "0177.0.0.1",
+        "::ffff:127.0.0.1",
+        "::ffff:7f00:1",
+        "::ffff:0.0.0.0",
+        "0",
+        "LOCALHOST",
+        "localhost.",
+    ],
+)
+def test_other_loopback_forms_are_blocked(host):
+    assert guard._is_loopback_host(host)
+    url = f"http://[{host}]:4723/status" if ":" in host else f"http://{host}:4723/status"
+    with pytest.raises(RealDeviceAccessError, match="loopback URL"):
+        urllib.request.urlopen(url)
+
+
+@pytest.mark.parametrize("host", ["10.0.0.2", "1", "::ffff:10.0.0.2", "example.com", "1.2.3.4"])
+def test_other_hosts_are_not_loopback(host):
+    assert not guard._is_loopback_host(host)

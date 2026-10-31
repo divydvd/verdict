@@ -39,10 +39,12 @@ teardown of a ``requires_device`` test runs with ``--run-device``.
 
 from __future__ import annotations
 
+import inspect
 import ipaddress
 import os
 import re
 import shlex
+import socket
 import subprocess
 import urllib.parse
 import urllib.request
@@ -434,22 +436,72 @@ def _patch(owner: Any, name: str, make_wrapper: Callable[[Any], Any]) -> None:
     setattr(owner, name, make_wrapper(original))
 
 
+def _check_program(program: Any, argv: Any) -> None:
+    # The OS starts program, not argv[0]. Check program in the executable
+    # position, so that "sh" with "-c" gets the shell-string check also when
+    # argv[0] has a different name.
+    if not isinstance(program, (str, bytes, os.PathLike)):
+        return
+    rest = list(argv[1:]) if isinstance(argv, (list, tuple)) else []
+    _check([program, *rest])
+
+
+def _check_shell_items(args: Any) -> None:
+    # With shell=True, Popen runs each item of a list or a tuple as shell text
+    # ("sh -c ITEM0 ITEM1 ...").
+    items = args if isinstance(args, (list, tuple)) else [args]
+    _check(*(item for item in items if isinstance(item, (str, bytes, os.PathLike))))
+
+
 def _guard_execute_child(original: Any) -> Any:
-    # Popen.__init__ calls _execute_child with the final argv (for shell=True,
-    # [shell, "-c", command]). Patching it covers run, call, check_output,
-    # os.popen, asyncio, and code that imported Popen before this hook ran.
+    # Popen.__init__ calls _execute_child with the args and the shell flag
+    # before it adds [shell, "-c"]. Patching it covers run, call,
+    # check_output, os.popen, asyncio, and code that imported Popen before
+    # this hook ran.
+    signature = inspect.signature(original)
+
     def wrapper(self: Any, args: Any, executable: Any, *rest: Any, **kwargs: Any) -> Any:
         args = _materialize(args)
         _check(args, executable)
+        bound = signature.bind(self, args, executable, *rest, **kwargs)
+        if bound.arguments.get("shell"):
+            _check_shell_items(args)
+        elif executable is not None:
+            _check_program(executable, args if isinstance(args, (list, tuple)) else [args])
         return original(self, args, executable, *rest, **kwargs)
 
     return wrapper
 
 
+def _program_and_argv(name: str, args: tuple[Any, ...]) -> tuple[Any, Any] | None:
+    # Return (program, argv) for os.exec*, os.spawn*, and os.posix_spawn*.
+    if name.startswith("posix_spawn"):
+        return (args[0], args[1]) if len(args) >= 2 else None
+    if name.startswith("spawn"):
+        args = args[1:]
+    if not args:
+        return None
+    suffix = name.removeprefix("exec").removeprefix("spawn")
+    if suffix.startswith("v"):
+        return (args[0], args[1]) if len(args) >= 2 else None
+    argv = args[1:-1] if suffix.endswith("e") else args[1:]
+    return args[0], list(argv)
+
+
 def _guard_function(original: Any) -> Any:
+    name = getattr(original, "__name__", "")
+
     def wrapper(*args: Any, **kwargs: Any) -> Any:
         args = tuple(_materialize(arg) for arg in args)
-        _check(*args)
+        if not args and "argv" in kwargs:
+            kwargs["argv"] = _materialize(kwargs["argv"])
+        _check(*args, *kwargs.values())
+        if name in _EXEC_FUNCTIONS:
+            found = _program_and_argv(name, args)
+            if found is None and "path" in kwargs:
+                found = (kwargs["path"], kwargs.get("argv", ()))
+            if found is not None:
+                _check_program(*found)
         return original(*args, **kwargs)
 
     return wrapper
@@ -487,16 +539,29 @@ def _url_host(url: Any) -> str | None:
         return None
 
 
-def _is_loopback_host(host: str | None) -> bool:
-    if host is None:
-        return False
-    if host.lower() in _LOOPBACK_NAMES:
-        return True
+def _ip_address(host: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
     try:
         address = ipaddress.ip_address(host)
     except ValueError:
+        # inet_aton reads the short, decimal, octal, and hex IPv4 forms that
+        # the resolver also reads, for example 127.1 and 0x7f000001.
+        try:
+            return ipaddress.IPv4Address(socket.inet_aton(host))
+        except (OSError, ValueError):
+            return None
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
+        return address.ipv4_mapped
+    return address
+
+
+def _is_loopback_host(host: str | None) -> bool:
+    if host is None:
         return False
-    return address.is_loopback or address.is_unspecified
+    host = host.lower().rstrip(".")
+    if host in _LOOPBACK_NAMES:
+        return True
+    address = _ip_address(host)
+    return address is not None and (address.is_loopback or address.is_unspecified)
 
 
 def _guard_urlopen(original: Any) -> Any:
