@@ -38,6 +38,11 @@ XCUITest attributes:
 | `description` | `label` |
 | `class_name` | `type` (for example `XCUIElementTypeButton`) |
 
+Appium's `name` attribute is not only the accessibility identifier. If an element has no
+accessibility identifier, `name` falls back to `label`. Thus a `resource_id` selector can match
+an element by its (possibly localized) label. The app under test should set
+`accessibilityIdentifier` on each element that the scenarios use.
+
 Element ids can be different on each platform. Thus a scenario step can give one selector for
 each platform:
 
@@ -65,7 +70,10 @@ each platform:
   until the correct keyboard shows.
 - **Secure fields.** iOS does not show custom keyboards in password fields.
 - **`clear_data`.** iOS has no clear-data command. The driver uninstalls the app and then
-  installs it again.
+  installs it again. Thus `clear_data(bundle_id)` needs an app file for that bundle id
+  (`--app BUNDLE_ID=PATH`). If no app file is available, the driver raises `DriverError`
+  before it uninstalls anything. Thus the driver never removes an app that it cannot install
+  again.
 - **`collect_bugreport`.** iOS has no equivalent. The method returns `None`, as ADR-0007
   permits.
 - **Signing.** WDA must be signed. With a free Apple ID, the signing expires every 7 days.
