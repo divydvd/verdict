@@ -121,9 +121,6 @@ class AppiumSession(Protocol):
     """The part of an Appium `webdriver.Remote` session that the iOS driver uses."""
 
     @property
-    def page_source(self) -> str: ...
-
-    @property
     def switch_to(self) -> Any: ...
 
     def execute(self, driver_command: str, params: dict[str, Any] | None = None) -> Any: ...
@@ -298,7 +295,12 @@ class IosAppiumDriver:
 
     def _send_to_focused(self, text: str) -> None:
         with _element_errors("typing into the focused element"):
-            self._session.switch_to.active_element.send_keys(text)
+            try:
+                self._session.switch_to.active_element.send_keys(text)
+            except _STALE_ELEMENT as exc:
+                # The focus moved between the lookup and the keys. This is a
+                # test result, not a connection failure.
+                raise ElementNotFoundError(f"the focused element changed: {exc}") from exc
 
     # -- InputDriver -----------------------------------------------------
 
@@ -367,12 +369,17 @@ class IosAppiumDriver:
             if attempt:
                 self.sleep(self.poll_ms / 1000)
             try:
-                return parse_ios_hierarchy(self._session.page_source)
+                return parse_ios_hierarchy(self._read_source())
             except ET.ParseError as exc:
                 last_error = exc
         raise DriverError(
             f"hierarchy dump failed after {max(1, self.dump_attempts)} attempt(s): {last_error}"
         ) from last_error
+
+    def _read_source(self) -> str:
+        # Ask for XML explicitly. With `useJSONSource`, `page_source` drops
+        # `placeholderValue`, and an empty field then shows its placeholder as text.
+        return str(self._session.execute_script("mobile: source", {"format": "xml"}))
 
     def wait_for(self, selector: Selector, timeout_ms: int) -> bool:
         return self._find_with_wait(selector, timeout_ms) is not None
