@@ -28,7 +28,7 @@ def test_trigger_autocorrect_sends_space_as_key_event_not_paste():
 
 def _suggestion_strip() -> UiNode:
     return UiNode(
-        content_desc="suggestion_strip",
+        resource_id="suggestion_strip",
         children=[
             UiNode(text="hello", bounds=(0, 0, 100, 50)),
             UiNode(text="world", bounds=(100, 0, 200, 50)),

@@ -192,8 +192,8 @@ was insufficient, what problem the proposal solves, the tradeoffs, and phase pla
   `assertions/keyboard.py`, `assertions/suggestions.py`, etc., indistinguishable from
   platform-generic assertions like `app_did_not_crash`.
 - **Problem solved:** a dedicated `domains/ime/` package groups IME-specific Selectors (known
-  resource-ids/content-descriptions for SmarType's suggestion strip, AI overlay, clipboard chip,
-  language-switch key), Actions (`trigger_autocorrect`, `select_suggestion`, `swipe_type`), and
+  resource ids for SmarType's suggestion strip, AI overlay, clipboard chip, and language-switch
+  key; see `docs/ime-selector-contract.md`), Actions (`trigger_autocorrect`, `select_suggestion`, `swipe_type`), and
   Assertions (`autocorrect_applied`, `suggestion_contains`, `clipboard_suggestion_shown`,
   `theme_matches`, `language_switched`) — separated from truly generic, reusable assertions
   (`app_did_not_crash`, `latency_under`, `screenshot_captured`) that stay in `assertions/`.
