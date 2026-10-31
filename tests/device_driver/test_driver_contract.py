@@ -25,6 +25,13 @@ def test_fake_driver_satisfies_contract():
     _assert_basic_driver_contract(driver)
 
 
+def test_ios_driver_satisfies_contract(tmp_path):
+    from tests.device_driver.fake_appium import make_driver
+
+    driver, _ = make_driver(tmp_path)
+    _assert_basic_driver_contract(driver)
+
+
 @pytest.mark.requires_device
 def test_android_driver_satisfies_contract():
     from verdict.device_driver.android import AndroidUiautomator2Driver

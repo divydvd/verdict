@@ -59,6 +59,55 @@ verdict restore bha.keys.smartype.debug --dir "$EVIDENCE" --result PASS|FAIL|BLO
 6. Exit 0: equal, and the backups are deleted (unless `--keep-backup`). Exit 1: a difference
    stays, and the backups are kept. Exit 2: `BLOCKED: <reason>`.
 
+## iOS device tests
+
+Verdict runs iOS scenarios through an Appium server with the XCUITest driver (see
+[ADR-0009](docs/adr/0009-ios-driver-appium-xcuitest.md)). Install the iOS extra first:
+`pip install -e '.[ios]'`.
+
+Check that the Mac is ready:
+
+```bash
+verdict doctor ios [--device UDID] [--appium-url http://127.0.0.1:4723] \
+  [--capability KEY=VALUE ...] [--capabilities-file PATH]
+```
+
+- It checks Xcode, `appium`, the `xcuitest` driver, the Appium server, `ffmpeg`, the iPhone or
+  booted Simulator, Developer Mode, WDA signing, and the iOS extra.
+- Give it the same capabilities as `verdict run`. Then the WDA signing check can read
+  `appium:xcodeOrgId`, `appium:xcodeConfigFile`, or `appium:usePreinstalledWDA`.
+  `appium:updatedWDABundleId` alone does not sign WDA, so it gives a `WARN`.
+- It cannot read the UI Automation setting. It prints an `INFO` line: turn on
+  Settings > Developer > Enable UI Automation on the iPhone.
+- It prints one line for each check (`OK`, `INFO`, `WARN`, or `FAIL`) and a fix for each problem.
+  A tool that cannot start is "missing". A tool that starts and fails shows its exit code and
+  the first line of its error output.
+- Exit 0: no required check failed. Exit 2: a required check failed. A `WARN` does not change
+  the exit code.
+
+Run a scenario on iOS:
+
+```bash
+verdict run scenario.yaml --platform ios --device UDID --app bha.keys.smartype=/path/SmarType.app
+```
+
+- `--platform` is `android` by default. On iOS, `--device` is the UDID of the iPhone or the
+  Simulator.
+- `--appium-url` sets the server URL. `--app BUNDLE_ID=PATH` gives the app file for `clear_data`.
+  PATH must be an `.app` folder or an `.ipa` file on this Mac, else the run stops (exit 2).
+  You can give `--app` more than one time.
+- `--capability KEY=VALUE` gives one Appium capability. `true`, `false`, `null`, an integer
+  (`8100`), a JSON object, and a JSON array are parsed. Other values stay text, also floats such as
+  `17.4`. Known text keys always stay text, with or without the `appium:` prefix: for example
+  `platformVersion`, `xcodeOrgId`, `xcodeSigningId`, `udid`, and `bundleId`. A value with inf or
+  nan (also `Infinity` or `NaN`) is a usage error (exit 2). `--capabilities-file PATH` reads a JSON
+  object. A `--capability` value overrides the file value. A real iPhone needs WDA signing, for example:
+  `--capability appium:xcodeOrgId=TEAMID --capability "appium:xcodeSigningId=Apple Development"`.
+- `--app`, `--capability`, and `--capabilities-file` are usage errors on Android.
+- Exit 0: PASSED. Exit 1: FAILED. Exit 2: BLOCKED (the connection failed, or the iOS extra is not
+  installed). Exit 3: SKIPPED (the scenario does not support the platform; the reason is printed).
+- `verdict baseline` and `verdict restore` are for Android only.
+
 ## Development
 
 Requires Python 3.11+.

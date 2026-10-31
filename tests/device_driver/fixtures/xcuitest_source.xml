@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<AppiumAUT>
+  <XCUIElementTypeApplication type="XCUIElementTypeApplication" name="SmarType" label="SmarType" enabled="true" visible="true" x="0" y="0" width="390" height="844">
+    <XCUIElementTypeWindow type="XCUIElementTypeWindow" enabled="true" visible="true" x="0" y="0" width="390" height="844">
+      <XCUIElementTypeTextField type="XCUIElementTypeTextField" name="messageField" label="Message" value="Hello" enabled="true" visible="true" x="16" y="100" width="358" height="44"/>
+      <XCUIElementTypeButton type="XCUIElementTypeButton" name="sendButton" label="Send" enabled="true" visible="true" x="300" y="160" width="74" height="44"/>
+      <XCUIElementTypeSwitch type="XCUIElementTypeSwitch" name="autocorrectSwitch" label="Autocorrect" value="1" enabled="true" visible="true" x="16" y="220" width="51" height="31"/>
+      <XCUIElementTypeSwitch type="XCUIElementTypeSwitch" name="soundSwitch" label="Sound" value="0" enabled="true" visible="true" x="16" y="260" width="51" height="31"/>
+    </XCUIElementTypeWindow>
+  </XCUIElementTypeApplication>
+</AppiumAUT>

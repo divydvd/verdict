@@ -4,7 +4,14 @@ from typing import Annotated, Any
 
 from pydantic import BaseModel, BeforeValidator, Field, model_validator
 
-from verdict.core.models import Direction, KeyInput, Selector, normalize_key
+from verdict.core.exceptions import VerdictError
+from verdict.core.models import Direction, KeyInput, Platform, Selector, normalize_key
+
+_PLATFORM_KEYS = frozenset(platform.value for platform in Platform)
+
+
+class MissingPlatformSelectorError(VerdictError):
+    """The step has per-platform selectors, but none for the driver platform."""
 
 # One entry per action name: the StepSpec fields that must be non-None for
 # that action. Mirrors the DeviceDriver protocol methods 1:1 (plus `assert`
@@ -40,8 +47,19 @@ def register_action(name: str, required_fields: tuple[str, ...] = ()) -> None:
 
 
 class StepSpec(BaseModel):
+    """One scenario step.
+
+    `selector` has two forms. The plain form applies to all platforms:
+    `selector: {resource_id: "send"}`. The per-platform form has one
+    selector for each platform: `selector: {android: {...}, ios: {...}}`.
+    The parser moves the per-platform form into `selector_variants`. The
+    runner calls `for_platform()` to put the variant for the driver platform
+    into `selector` before it runs the step.
+    """
+
     action: str
     selector: Selector | None = None
+    selector_variants: dict[Platform, Selector] | None = None
     text: str | None = None
     path: str | None = None
     package: str | None = None
@@ -65,18 +83,63 @@ class StepSpec(BaseModel):
     # `ensure_checked` only: the wanted state of a switch or a check box.
     checked: bool | None = None
 
+    @model_validator(mode="before")
+    @classmethod
+    def _split_platform_selector(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        selector = data.get("selector")
+        if not isinstance(selector, dict) or not _PLATFORM_KEYS.intersection(selector):
+            return data
+        unknown = sorted(str(key) for key in selector if key not in _PLATFORM_KEYS)
+        if unknown:
+            raise ValueError(
+                f"a per-platform selector can have only platform keys "
+                f"({', '.join(sorted(_PLATFORM_KEYS))}); unknown key(s): {', '.join(unknown)}"
+            )
+        if data.get("selector_variants") is not None:
+            raise ValueError("give the per-platform selectors in 'selector' only")
+        return {**data, "selector": None, "selector_variants": selector}
+
     @model_validator(mode="after")
     def _validate_required_fields(self) -> StepSpec:
         required = _REQUIRED_FIELDS.get(self.action)
         if required is None:
             known = ", ".join(sorted(_REQUIRED_FIELDS))
             raise ValueError(f"Unknown step action '{self.action}'. Known actions: {known}")
-        missing = [field for field in required if getattr(self, field) is None]
+        if self.selector is not None and self.selector_variants is not None:
+            raise ValueError("a step can have 'selector' or 'selector_variants', not both")
+        if self.selector_variants is not None and not self.selector_variants:
+            raise ValueError("'selector_variants' must have at least one platform")
+        missing = [
+            field
+            for field in required
+            if getattr(self, field) is None
+            and not (field == "selector" and self.selector_variants is not None)
+        ]
         if missing:
             raise ValueError(
                 f"step action '{self.action}' is missing required field(s): {', '.join(missing)}"
             )
         return self
+
+    def for_platform(self, platform: Platform) -> StepSpec:
+        """Return this step with the selector for `platform` in `selector`.
+
+        A step with no per-platform selectors does not change. Raises
+        `MissingPlatformSelectorError` when the step has per-platform
+        selectors, but none for `platform`.
+        """
+        if self.selector_variants is None:
+            return self
+        variant = self.selector_variants.get(platform)
+        if variant is None:
+            given = ", ".join(sorted(p.value for p in self.selector_variants))
+            raise MissingPlatformSelectorError(
+                f"step action '{self.action}' has no selector for platform "
+                f"'{platform.value}' (it has: {given})"
+            )
+        return self.model_copy(update={"selector": variant, "selector_variants": None})
 
 
 class RetryPolicy(BaseModel):
@@ -94,6 +157,8 @@ class ScenarioSpec(BaseModel):
     covers: list[str] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)
     variables: dict[str, str] = Field(default_factory=dict)
+    # The platforms that the scenario supports. None means all platforms.
+    platforms: list[Platform] | None = None
     steps: list[StepSpec]
     retries: RetryPolicy = Field(default_factory=RetryPolicy)
     evidence: EvidencePolicy = Field(default_factory=EvidencePolicy)
@@ -102,4 +167,9 @@ class ScenarioSpec(BaseModel):
     def _non_empty_steps(self) -> ScenarioSpec:
         if not self.steps:
             raise ValueError("scenario must have at least one step")
+        if self.platforms is not None and not self.platforms:
+            raise ValueError("'platforms' must have at least one platform; remove it for all platforms")
         return self
+
+    def supports(self, platform: Platform) -> bool:
+        return self.platforms is None or platform in self.platforms

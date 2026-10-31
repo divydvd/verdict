@@ -13,6 +13,8 @@ Naming is not architecturally significant and can change without invalidating th
 - v1.0 (this document) — Principal Engineer review completed (§3); driver interface decomposed;
   plugin architecture, performance engine, domain module, regression planner, and richer agent
   API added; explicit Out of Scope list; ADRs added.
+- v1.0 amendment — ADR-0009 added to §14. The iOS driver (§10) starts now, ahead of its Phase 4
+  slot. The design does not change.
 
 ---
 
@@ -395,6 +397,24 @@ class DeviceDriver(InputDriver, AppLifecycleDriver, DiagnosticsDriver, Protocol)
   when the state differs, then reads the state again with the `settle_ms` re-checks. After the
   tap, a missing node is read again in the same re-checks, because the screen can redraw. The
   step fails when the state does not change, or when no matched node or ancestor is checkable.
+- Per-platform selectors (ADR-0009). Element ids can be different on Android and iOS. A step can
+  give one selector for each platform:
+
+  ```yaml
+  - action: tap
+    selector:
+      android: { resource_id: "com.app:id/send" }
+      ios: { resource_id: "sendButton" }
+  ```
+
+  The plain form (`selector: { resource_id: "send" }`) applies to all platforms. Before a step
+  runs, the runner selects the selector for `driver.platform`. When the step has no selector for
+  that platform, the step fails with a clear error. A per-platform selector cannot also have
+  plain selector keys.
+- Supported platforms. The optional scenario field `platforms: [android, ios]` lists the
+  platforms that the scenario supports. When you do not give it, the scenario supports all
+  platforms. When the device platform is not in the list, the runner runs no step. The result
+  is `SKIPPED`, and the report shows the skip reason.
 
 ### 6.3 Assertion Library (`assertions/`) + `domains/ime/`
 
@@ -733,6 +753,7 @@ Full rationale for each is in `docs/adr/`. Index:
 - [ADR-0006](adr/0006-planning-is-external.md) — Planning is external to the framework
 - [ADR-0007](adr/0007-layered-device-driver-protocols.md) — Device Driver decomposed into layered protocols
 - [ADR-0008](adr/0008-deterministic-regression-selection.md) — Regression scenario selection is deterministic, tag-based
+- [ADR-0009](adr/0009-ios-driver-appium-xcuitest.md) — iOS driver through Appium XCUITest
 
 ## 15. Out of Scope / Future Work
 

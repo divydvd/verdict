@@ -7,6 +7,7 @@
   body { font-family: sans-serif; margin: 2rem; }
   .pass { color: #1a7f37; }
   .fail { color: #cf222e; }
+  .skip { color: #9a6700; }
   .step { border: 1px solid #d0d7de; border-radius: 6px; padding: 0.75rem 1rem; margin-bottom: 0.75rem; }
   .evidence img, .evidence video { max-width: 320px; display: block; margin-top: 0.5rem; }
 </style>
@@ -14,9 +15,10 @@
 <body>
 <h1>Scenario: {{ timeline.scenario_name }}</h1>
 <p>
-  <strong>Result:</strong> <span class="{{ 'pass' if result.passed else 'fail' }}">{{ result.status }}</span><br>
+  <strong>Result:</strong> <span class="{{ 'skip' if result.skipped else ('pass' if result.passed else 'fail') }}">{{ result.status }}</span><br>
   <strong>Attempts:</strong> {{ result.attempts }}<br>
-  <strong>Run ID:</strong> {{ timeline.run_id }}
+  <strong>Run ID:</strong> {{ timeline.run_id }}{% if result.skip_reason %}<br>
+  <strong>Skip reason:</strong> {{ result.skip_reason }}{% endif %}
 </p>
 <h2>Steps</h2>
 {% for event in timeline.events %}

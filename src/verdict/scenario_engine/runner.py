@@ -21,9 +21,15 @@ class ScenarioResult(BaseModel):
     attempts: int
     timeline: Timeline
     blocked: bool = False
+    # The runner did not run the scenario: the driver platform is not in
+    # `ScenarioSpec.platforms`. `skip_reason` says why.
+    skipped: bool = False
+    skip_reason: str | None = None
 
     @property
     def status(self) -> str:
+        if self.skipped:
+            return "SKIPPED"
         if self.blocked:
             return "BLOCKED"
         return "PASSED" if self.passed else "FAILED"
@@ -204,7 +210,8 @@ def _run_once(
     blocked_errors: tuple[type[BaseException], ...] = (),
 ) -> str:
     collector = EvidenceCollector(driver, ctx.evidence_dir)
-    for index, step in enumerate(spec.steps):
+    for index, spec_step in enumerate(spec.steps):
+        step = spec_step
         step_id = f"{index}:{step.action}"
         error: str | None = None
         passed = True
@@ -213,6 +220,7 @@ def _run_once(
 
         start = time.perf_counter()
         try:
+            step = spec_step.for_platform(driver.platform)
             action_fn = _ACTIONS[step.action]
             result: AssertionResult | None
             if action_fn is _do_ensure_checked:
@@ -276,12 +284,30 @@ def run_scenario(
 
     An exception in `blocked_errors` (a lost device connection) stops the run
     with no retry. The result is BLOCKED and keeps the partial timeline.
+
+    When `spec.platforms` does not include `driver.platform`, the runner runs
+    no step. The result is SKIPPED, with `skip_reason` and an empty timeline.
+    Each step gets the selector for `driver.platform` before it runs. A step
+    with no selector for that platform fails with a clear error.
     """
     resolved_run_id = run_id or str(uuid.uuid4())
     resolved_evidence_dir = evidence_dir or Path(f"/tmp/verdict-evidence-{resolved_run_id}")
 
     max_attempts = max(1, spec.retries.max_attempts)
     timeline = Timeline(run_id=resolved_run_id, scenario_name=spec.name)
+
+    if not spec.supports(driver.platform):
+        supported = ", ".join(platform.value for platform in spec.platforms or ())
+        return ScenarioResult(
+            passed=False,
+            skipped=True,
+            skip_reason=(
+                f"the scenario supports only {supported}; the device platform is "
+                f"{driver.platform.value}"
+            ),
+            attempts=0,
+            timeline=timeline,
+        )
 
     for attempt in range(1, max_attempts + 1):
         ctx = RunContext(

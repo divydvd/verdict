@@ -14,3 +14,4 @@ alternative design would also work.
 | [0006](0006-planning-is-external.md) | Planning is external to the framework |
 | [0007](0007-layered-device-driver-protocols.md) | Device Driver decomposed into layered protocols |
 | [0008](0008-deterministic-regression-selection.md) | Regression scenario selection is deterministic, tag-based |
+| [0009](0009-ios-driver-appium-xcuitest.md) | iOS driver through Appium XCUITest |

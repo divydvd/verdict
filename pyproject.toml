@@ -24,6 +24,10 @@ dev = [
     "ruff>=0.5",
     "mypy>=1.10",
     "types-PyYAML>=6.0",
+    "Appium-Python-Client>=4.0",
+]
+ios = [
+    "Appium-Python-Client>=4.0",
 ]
 
 [project.scripts]
@@ -34,7 +38,7 @@ packages = ["src/verdict"]
 
 [tool.pytest.ini_options]
 markers = [
-    "requires_device: test needs a real Android device/emulator attached via adb",
+    "requires_device: test needs a real Android device (through adb) or a real iOS device (through Appium)",
 ]
 testpaths = ["tests"]
 

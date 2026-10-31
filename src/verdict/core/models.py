@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field, model_validator
 
 class Platform(str, Enum):
     ANDROID = "android"
-    IOS = "ios"          # reserved, no implementation until Phase 4
+    IOS = "ios"          # IosAppiumDriver, see ADR-0009
     DESKTOP = "desktop"  # reserved, no implementation planned
     WEB = "web"          # reserved, no implementation planned
 
