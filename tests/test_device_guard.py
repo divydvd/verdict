@@ -185,6 +185,7 @@ _IOS_TOOLS = (
     "xcodebuild",
     "xcrun",
     "appium",
+    "ffmpeg",
     "idevice_id",
     "ideviceinstaller",
     "idevicesyslog",
@@ -347,3 +348,11 @@ def test_urlopen_without_a_loopback_host_is_not_blocked():
         assert response.read() == b"hello"
     assert not guard._is_loopback_host("10.0.0.2")
     assert not guard._is_loopback_host("example.com")
+
+
+def test_doctor_ffmpeg_version_check_is_blocked(fake_ios_tools):
+    with pytest.raises(RealDeviceAccessError, match="run ffmpeg without --run-device"):
+        subprocess.run(["ffmpeg", "-version"], capture_output=True, check=False)
+    with pytest.raises(RealDeviceAccessError, match="run ffmpeg without --run-device"):
+        subprocess.run("echo start; /opt/homebrew/bin/ffmpeg -version", shell=True, check=False)
+    assert list(fake_ios_tools.iterdir()) == []

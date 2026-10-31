@@ -4,8 +4,8 @@ Tests marked ``requires_device`` run only with ``--run-device``. In all other
 code, the guard blocks these actions on an Android or iOS device:
 
 - Start ``adb`` or an iOS tool: ``xcode-select``, ``xcodebuild``, ``xcrun``
-  (this covers ``xcrun devicectl`` and ``xcrun simctl``), ``appium``, every
-  ``idevice*`` tool, ``pymobiledevice3``, ``go-ios``, and ``tidevice``. The
+  (this covers ``xcrun devicectl`` and ``xcrun simctl``), ``appium``, ``ffmpeg``,
+  every ``idevice*`` tool, ``pymobiledevice3``, ``go-ios``, and ``tidevice``. The
   guard finds these names in every word of the command, as for ``adb``.
 - Start ``ios`` (the go-ios executable). The word ``ios`` is also a normal
   argument (``verdict run --platform ios``), so the guard blocks it only in
@@ -50,6 +50,7 @@ _DEVICE_TOOL_NAMES = frozenset(
         "xcodebuild",
         "xcrun",
         "appium",
+        "ffmpeg",
         "pymobiledevice3",
         "go-ios",
         "tidevice",
