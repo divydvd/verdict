@@ -123,3 +123,13 @@ def test_android_nodes_keep_text_only_matching():
     from verdict.core.models import UiNode
 
     assert not UiNode(text="Hello", content_desc="Message").matches(Selector(text="Message"))
+
+
+@pytest.mark.parametrize("value_attr", ["", ' value=""'])
+def test_text_field_without_value_has_empty_text_not_the_label(value_attr):
+    root = parse_ios_hierarchy_xml(
+        f'<XCUIElementTypeTextField type="XCUIElementTypeTextField" label="Message"{value_attr}/>'
+    )
+    assert root is not None
+    assert root.text == ""
+    assert root.content_desc == "Message"

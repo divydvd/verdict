@@ -57,8 +57,11 @@ def _node_from_element(element: ET.Element) -> UiNode:
     if checkable:
         # The value of a switch is its state, not its text. Use the label as the text.
         text = label
-    elif class_name in TEXT_INPUT_TYPES and value is not None and value == attrib.get("placeholderValue"):
-        # An empty text field reports its placeholder as its value. When the
+    elif class_name in TEXT_INPUT_TYPES and (
+        value is None or value == attrib.get("placeholderValue")
+    ):
+        # A text field with no value is empty. Its label is not its text.
+        # An empty text field can also report its placeholder as its value. When the
         # typed text equals the placeholder, the parser cannot tell the two
         # apart and gives an empty text. A false FAIL is safer than a false PASS.
         text = ""
@@ -81,8 +84,9 @@ def parse_ios_hierarchy_xml(raw_xml: str) -> UiNode | None:
 
     The attributes map as follows: `name` to `resource_id`, `label` to
     `content_desc`, `value` (or else `label`) to `text`, `type` to
-    `class_name`, and `x`, `y`, `width`, `height` to `bounds`. An empty text
-    field (its `value` is its `placeholderValue`) has an empty text. If the
+    `class_name`, and `x`, `y`, `width`, `height` to `bounds`. A text field
+    with no `value`, or with its `placeholderValue` as its value, has an
+    empty text. The label stays in `content_desc`. If the
     typed text equals the placeholder, the parser cannot tell, and also gives
     an empty text. A false FAIL is safer than a false PASS. A `text` selector
     matches the text or the label (`content_desc`), like the live locator. A switch is

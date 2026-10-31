@@ -383,7 +383,9 @@ class IosAppiumDriver:
         self._session.execute_script("mobile: installApp", {"app": path})
 
     def uninstall(self, package: str) -> None:
-        self._session.execute_script("mobile: removeApp", {"bundleId": package})
+        # XCUITest returns False, not an error, when the removal fails.
+        if self._session.execute_script("mobile: removeApp", {"bundleId": package}) is False:
+            raise DriverError(f"iOS could not remove {package}.")
 
     def launch(self, package: str, activity: str | None = None) -> None:
         # iOS apps have no activities. The driver ignores `activity`.
