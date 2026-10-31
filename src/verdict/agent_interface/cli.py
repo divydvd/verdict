@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Callable
+from contextlib import suppress
 from pathlib import Path
 
 import click
@@ -13,8 +14,14 @@ import click
 # has to happen somewhere above it -- the CLI entry point is that place.
 import verdict.domains.ime  # noqa: F401
 from verdict.core.exceptions import VerdictError
+from verdict.core.models import Platform
 from verdict.device_driver.android import CONNECTION_ERRORS, AndroidUiautomator2Driver
 from verdict.device_driver.base import DeviceDriver
+from verdict.device_driver.ios_appium import (
+    DEFAULT_APPIUM_URL,
+    IOS_CONNECTION_ERRORS,
+    IosAppiumDriver,
+)
 from verdict.device_state.adb import Adb, AdbError, SubprocessAdb
 from verdict.device_state.baseline import (
     Baseline,
@@ -22,6 +29,13 @@ from verdict.device_state.baseline import (
     preflight,
     prepare_private_folder,
     take_baseline,
+)
+from verdict.device_state.ios_doctor import (
+    IOS_EXTRA_INSTALL,
+    IosExtraMissingError,
+    doctor_passed,
+    ios_extra_installed,
+    run_ios_doctor,
 )
 from verdict.device_state.restore import (
     RestoreReport,
@@ -41,6 +55,32 @@ def _default_driver_factory(serial: str | None) -> DeviceDriver:
     return AndroidUiautomator2Driver(serial=serial)
 
 
+def ios_driver_factory(appium_url: str, app_paths: dict[str, str]) -> DriverFactory:
+    """Return a factory that opens an Appium session on the iOS device with that UDID."""
+
+    def factory(udid: str | None) -> DeviceDriver:
+        if not ios_extra_installed():
+            raise IosExtraMissingError(
+                f"the `ios` extra is not installed. Install it: {IOS_EXTRA_INSTALL}"
+            )
+        return IosAppiumDriver(udid=udid, appium_url=appium_url, app_paths=app_paths)
+
+    return factory
+
+
+def blocked_errors_for(platform: Platform) -> tuple[type[BaseException], ...]:
+    """Return the errors that make a run BLOCKED on `platform`."""
+    return IOS_CONNECTION_ERRORS if platform is Platform.IOS else CONNECTION_ERRORS
+
+
+def _close_driver(driver: DeviceDriver) -> None:
+    close = getattr(driver, "close", None)
+    if callable(close):
+        # The session can be gone already (a BLOCKED run). That does not change the result.
+        with suppress(Exception):
+            close()
+
+
 def execute_run(
     scenario_path: Path,
     variables: dict[str, str],
@@ -48,16 +88,26 @@ def execute_run(
     formats: tuple[str, ...],
     device: str | None,
     driver_factory: DriverFactory = _default_driver_factory,
+    platform: Platform = Platform.ANDROID,
 ) -> ScenarioResult:
     """Parse, run, and report on a scenario. Split out from the `run` click
     command so tests can inject a `driver_factory` (e.g. FakeDeviceDriver)
     without a real device/emulator attached.
+
+    `platform` selects the errors that make the run BLOCKED. The run closes
+    the driver session at the end, also after an error.
     """
     spec = parse_scenario(scenario_path, variables)
     driver = driver_factory(device)
-    result = run_scenario(
-        spec, driver, session_id=str(uuid.uuid4()), blocked_errors=CONNECTION_ERRORS
-    )
+    try:
+        result = run_scenario(
+            spec,
+            driver,
+            session_id=str(uuid.uuid4()),
+            blocked_errors=blocked_errors_for(platform),
+        )
+    finally:
+        _close_driver(driver)
     ReportGenerator(output_dir).generate(result, formats=formats)
     return result
 
@@ -67,6 +117,13 @@ def _parse_variable(raw: str) -> tuple[str, str]:
         raise click.BadParameter(f"expected KEY=VALUE, got {raw!r}")
     key, value = raw.split("=", 1)
     return key, value
+
+
+def _parse_app(raw: str) -> tuple[str, str]:
+    bundle_id, path = raw.split("=", 1) if "=" in raw else ("", "")
+    if not bundle_id or not path:
+        raise click.BadParameter(f"expected BUNDLE_ID=PATH, got {raw!r}")
+    return bundle_id, str(Path(path).expanduser().resolve())
 
 
 @click.group()
@@ -85,7 +142,32 @@ def main() -> None:
     help="Override/define a scenario variable. May be passed multiple times.",
 )
 @click.option(
-    "--device", "-s", default=None, help="adb serial; defaults to the only connected device."
+    "--platform",
+    type=click.Choice([Platform.ANDROID.value, Platform.IOS.value]),
+    default=Platform.ANDROID.value,
+    show_default=True,
+    help="The platform of the device.",
+)
+@click.option(
+    "--device",
+    "-s",
+    default=None,
+    help="Android: the adb serial (default: the only connected device). "
+    "iOS: the UDID of the iPhone or the Simulator.",
+)
+@click.option(
+    "--appium-url",
+    default=DEFAULT_APPIUM_URL,
+    show_default=True,
+    help="iOS only: the URL of the Appium server.",
+)
+@click.option(
+    "--app",
+    "apps",
+    multiple=True,
+    metavar="BUNDLE_ID=PATH",
+    help="iOS only: the .app or .ipa file of a bundle id. clear_data needs it. "
+    "May be passed multiple times.",
 )
 @click.option(
     "--output-dir",
@@ -104,33 +186,86 @@ def main() -> None:
 def run(
     scenario_path: Path,
     variables: tuple[str, ...],
+    platform: str,
     device: str | None,
+    appium_url: str,
+    apps: tuple[str, ...],
     output_dir: Path,
     formats: str,
 ) -> None:
-    """Run SCENARIO_PATH against a connected Android device/emulator.
+    """Run SCENARIO_PATH on a connected Android or iOS device.
 
     Exit 0: PASSED. Exit 1: FAILED. Exit 2: BLOCKED, the device connection
-    failed. The report keeps the steps before the BLOCKED step.
+    failed or the `ios` extra is not installed. The report keeps the steps
+    before the BLOCKED step. Exit 3: SKIPPED, the scenario does not support
+    the platform. The skip reason is printed.
     """
     var_dict = dict(_parse_variable(v) for v in variables)
     format_tuple = tuple(f.strip() for f in formats.split(",") if f.strip())
+    target = Platform(platform)
+    if target is Platform.IOS:
+        app_paths = dict(_parse_app(a) for a in apps)
+        factory = ios_driver_factory(appium_url, app_paths)
+    else:
+        if apps:
+            raise click.UsageError("--app applies only to --platform ios.")
+        factory = _default_driver_factory
+    blocked_errors = blocked_errors_for(target)
 
     try:
-        result = execute_run(scenario_path, var_dict, output_dir, format_tuple, device)
+        result = execute_run(
+            scenario_path, var_dict, output_dir, format_tuple, device, factory, target
+        )
+    except IosExtraMissingError as exc:
+        click.echo(f"BLOCKED: {exc}", err=True)
+        raise SystemExit(2) from exc
     except VerdictError as exc:
         raise click.ClickException(str(exc)) from exc
-    except CONNECTION_ERRORS as exc:
+    except blocked_errors as exc:
         click.echo(f"BLOCKED: the device connection failed: {type(exc).__name__}: {exc}", err=True)
         raise SystemExit(2) from exc
 
     click.echo(f"{result.timeline.scenario_name}: {result.status} ({result.attempts} attempt(s))")
     click.echo(f"Report written to {output_dir}")
+    if result.skipped:
+        click.echo(f"SKIPPED: {result.skip_reason}", err=True)
+        raise SystemExit(3)
     if result.blocked:
         click.echo(f"BLOCKED: {result.timeline.events[-1].error}", err=True)
         raise SystemExit(2)
     if not result.passed:
         raise SystemExit(1)
+
+
+@main.group()
+def doctor() -> None:
+    """Check that this computer is ready for device tests."""
+
+
+@doctor.command(name="ios")
+@click.option("--device", "-s", default=None, help="The UDID of the iPhone or the Simulator to find.")
+@click.option(
+    "--appium-url",
+    default=DEFAULT_APPIUM_URL,
+    show_default=True,
+    help="The URL of the Appium server.",
+)
+def doctor_ios(device: str | None, appium_url: str) -> None:
+    """Check Xcode, Appium, the XCUITest driver, the device, and the `ios` extra.
+
+    Each check prints one line: OK, WARN, or FAIL. Each WARN and FAIL also
+    prints a fix. Exit 0: no required check failed. Exit 2: a required check
+    failed.
+    """
+    checks = run_ios_doctor(device, appium_url)
+    for check in checks:
+        click.echo(f"{check.status.value:<4} {check.name}: {check.detail}")
+        if check.fix:
+            click.echo(f"     fix: {check.fix}")
+    if not doctor_passed(checks):
+        click.echo("iOS is not ready: fix each FAIL line.")
+        raise SystemExit(2)
+    click.echo("iOS is ready.")
 
 
 AdbFactory = Callable[[str | None], Adb]

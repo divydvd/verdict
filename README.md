@@ -59,6 +59,38 @@ verdict restore bha.keys.smartype.debug --dir "$EVIDENCE" --result PASS|FAIL|BLO
 6. Exit 0: equal, and the backups are deleted (unless `--keep-backup`). Exit 1: a difference
    stays, and the backups are kept. Exit 2: `BLOCKED: <reason>`.
 
+## iOS device tests
+
+Verdict runs iOS scenarios through an Appium server with the XCUITest driver (see
+[ADR-0009](docs/adr/0009-ios-driver-appium-xcuitest.md)). Install the iOS extra first:
+`pip install -e '.[ios]'`.
+
+Check that the Mac is ready:
+
+```bash
+verdict doctor ios [--device UDID] [--appium-url http://127.0.0.1:4723]
+```
+
+- It checks Xcode, `appium`, the `xcuitest` driver, the Appium server, the iPhone or booted
+  Simulator, and the iOS extra.
+- It prints one line for each check (`OK`, `WARN`, or `FAIL`) and a fix for each problem.
+- Exit 0: no required check failed. Exit 2: a required check failed. A server that does not
+  answer is only a `WARN`.
+
+Run a scenario on iOS:
+
+```bash
+verdict run scenario.yaml --platform ios --device UDID --app bha.keys.smartype=/path/SmarType.app
+```
+
+- `--platform` is `android` by default. On iOS, `--device` is the UDID of the iPhone or the
+  Simulator.
+- `--appium-url` sets the server URL. `--app BUNDLE_ID=PATH` gives the app file for `clear_data`.
+  You can give `--app` more than one time.
+- Exit 0: PASSED. Exit 1: FAILED. Exit 2: BLOCKED (the connection failed, or the iOS extra is not
+  installed). Exit 3: SKIPPED (the scenario does not support the platform; the reason is printed).
+- `verdict baseline` and `verdict restore` are for Android only.
+
 ## Development
 
 Requires Python 3.11+.
