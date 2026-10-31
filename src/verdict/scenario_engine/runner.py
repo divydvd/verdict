@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from verdict.assertions.base import assertion_registry
 from verdict.core.exceptions import DriverError, ElementNotFoundError, VerdictError
 from verdict.core.models import AssertionResult, RunContext, Timeline, TimelineEvent
-from verdict.device_driver.base import DeviceDriver
+from verdict.device_driver.base import DeviceDriver, KeyboardDriver
 from verdict.evidence.collector import EvidenceCollector
 from verdict.scenario_engine.schema import ScenarioSpec, StepSpec
 
@@ -143,6 +143,26 @@ def _do_ensure_checked(
     )
 
 
+def _do_select_keyboard(driver: DeviceDriver, step: StepSpec, ctx: RunContext) -> AssertionResult | None:
+    """Select a keyboard by its name. See ADR-0010.
+
+    The driver selects the keyboard and checks that it is active. With a
+    `selector`, the step then waits up to `timeout_ms` for that element of the
+    selected keyboard (for example `keyboard_view`).
+    """
+    assert isinstance(step.keyboard, str)
+    if not isinstance(driver, KeyboardDriver):
+        raise DriverError(
+            f"select_keyboard: the {driver.platform.value} driver cannot select a keyboard"
+        )
+    driver.select_keyboard(step.keyboard)
+    if step.selector is None:
+        return None
+    ok = driver.wait_for(step.selector, step.timeout_ms)
+    message = f"select_keyboard '{step.keyboard}': {step.selector!r} within {step.timeout_ms}ms"
+    return AssertionResult(passed=ok, message=message if ok else f"timed out: {message}")
+
+
 def _do_assert(driver: DeviceDriver, step: StepSpec, ctx: RunContext) -> AssertionResult:
     assert step.assertion is not None
     assertion = assertion_registry.get(step.assertion, **step.args)
@@ -162,6 +182,7 @@ _ACTIONS: dict[str, Callable[[DeviceDriver, StepSpec, RunContext], AssertionResu
     "press_key": _do_press_key,
     "wait_for": _do_wait_for,
     "ensure_checked": _do_ensure_checked,
+    "select_keyboard": _do_select_keyboard,
     "assert": _do_assert,
 }
 

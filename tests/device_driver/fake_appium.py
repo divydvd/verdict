@@ -16,7 +16,7 @@ class FakeElement:
     def __init__(self, calls: list[tuple[Any, ...]], element_id: str = "el-1") -> None:
         self.calls = calls
         self.id = element_id
-
+        self.rect = {"x": 8, "y": 775, "width": 69, "height": 70}
         self.stale_clicks = 0
 
     def click(self) -> None:

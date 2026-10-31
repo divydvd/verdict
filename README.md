@@ -108,6 +108,30 @@ verdict run scenario.yaml --platform ios --device UDID --app bha.keys.smartype=/
   installed). Exit 3: SKIPPED (the scenario does not support the platform; the reason is printed).
 - `verdict baseline` and `verdict restore` are for Android only.
 
+Select a keyboard (for example SmarType) with the `select_keyboard` step (see
+[ADR-0010](docs/adr/0010-keyboard-selection-capability.md)):
+
+```yaml
+- action: tap
+  selector: {resource_id: "text_field"}
+- action: select_keyboard
+  keyboard:
+    android: "bha.keys.smartype.debug/bha.keys.smartype.FlorisImeService"
+    ios: "SmarType"
+  selector: {resource_id: "keyboard_view"}
+```
+
+- On iOS, `keyboard` is the name in the globe-key list, for example `English (US)` or `Emoji`.
+  If the list shows a second line ("SmarType, English"), give the first line or the full label.
+  On Android, `keyboard` is the IME id.
+- Before the run, turn the keyboard on one time: on iOS in Settings > General > Keyboard >
+  Keyboards, on Android with `adb shell ime enable IME_ID`. Verdict does not turn it on.
+- On iOS, the keyboard must show. Tap a text field first. Verdict long-presses the globe key, taps
+  the name, and then opens the list again to check that the name is selected.
+- The step fails with a clear error when the keyboard is not in the list or does not become
+  active. With `selector`, the step also waits up to `timeout_ms` for that element.
+- The SmarType element names are in [the IME selector contract](docs/ime-selector-contract.md).
+
 ## Development
 
 Requires Python 3.11+.

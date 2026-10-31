@@ -15,3 +15,4 @@ alternative design would also work.
 | [0007](0007-layered-device-driver-protocols.md) | Device Driver decomposed into layered protocols |
 | [0008](0008-deterministic-regression-selection.md) | Regression scenario selection is deterministic, tag-based |
 | [0009](0009-ios-driver-appium-xcuitest.md) | iOS driver through Appium XCUITest |
+| [0010](0010-keyboard-selection-capability.md) | Keyboard selection as an optional driver capability |

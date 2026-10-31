@@ -72,8 +72,8 @@ each platform:
   jailbreak. Thus `baseline` and `restore` stay Android-only.
 - **No back key.** iOS has no back key. `press_key(BACK)` gives an error. Scenarios must tap the
   app's own back button.
-- **Keyboard selection.** iOS has no command to select a keyboard. A test must tap the globe key
-  until the correct keyboard shows.
+- **Keyboard selection.** iOS has no command to select a keyboard. The `select_keyboard` step
+  uses the globe-key list instead (ADR-0010).
 - **Secure fields.** iOS does not show custom keyboards in password fields.
 - **`clear_data`.** iOS has no clear-data command. The driver uninstalls the app and then
   installs it again. Thus `clear_data(bundle_id)` needs an app file for that bundle id

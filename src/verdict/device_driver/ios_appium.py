@@ -7,7 +7,7 @@ import time
 import uuid
 import xml.etree.ElementTree as ET
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -25,6 +25,7 @@ from verdict.core.models import (
     normalize_key,
 )
 from verdict.device_driver.ios_hierarchy import parse_ios_hierarchy
+from verdict.device_driver.ios_keyboard import GLOBE_KEY_NAMES, KeyboardMenu, parse_keyboard_menu
 
 DEFAULT_APPIUM_URL = "http://127.0.0.1:4723"
 
@@ -228,6 +229,8 @@ class IosAppiumDriver:
     poll_ms: int = 250
     tap_wait_ms: int = 5000
     dump_attempts: int = 3
+    keyboard_press_ms: int = 1000
+    keyboard_menu_wait_ms: int = 3000
 
     _session: AppiumSession = field(init=False, repr=False)
     _active_recording: tuple[RecordingHandle, Path] | None = field(default=None, init=False, repr=False)
@@ -383,6 +386,104 @@ class IosAppiumDriver:
 
     def wait_for(self, selector: Selector, timeout_ms: int) -> bool:
         return self._find_with_wait(selector, timeout_ms) is not None
+
+    # -- KeyboardDriver ----------------------------------------------------
+
+    def select_keyboard(self, name: str) -> None:
+        """Select a keyboard with the globe key. See ADR-0010.
+
+        A long press on the globe key opens the keyboard list. The driver taps
+        the cell of `name`, then opens the list again. The keyboard is active
+        when its cell has the `Selected` trait. The driver then closes the list.
+        """
+        menu = self._open_keyboard_menu()
+        try:
+            item = menu.pick(name)
+        except DriverError:
+            with suppress(DriverError):
+                self._close_keyboard_menu(menu)
+            raise
+        if item.selected:
+            self._close_keyboard_menu(menu)
+            return
+        cell = Selector(resource_id=item.label, class_name="XCUIElementTypeCell")
+        self._act_on_element(cell, lambda element: element.click(), self.keyboard_menu_wait_ms)
+        if not self._wait_until(self._keyboard_menu_closed):
+            raise DriverError(f"select_keyboard: the keyboard list stayed open after the tap on '{item.title}'")
+        check = self._open_keyboard_menu()
+        self._close_keyboard_menu(check)
+        active = check.active
+        if active is None or active.label != item.label:
+            now = f"'{active.title}'" if active is not None else "unknown"
+            raise DriverError(
+                f"select_keyboard: tapped '{item.title}', but the active keyboard is {now}"
+            )
+
+    def _globe_key(self) -> Selector:
+        selectors = [Selector(resource_id=key_name) for key_name in GLOBE_KEY_NAMES]
+        found: list[Selector] = []
+
+        def is_shown() -> bool:
+            found[:] = [selector for selector in selectors if self._find(selector) is not None]
+            return bool(found)
+
+        if not self._wait_until(is_shown):
+            names = ", ".join(f"'{key_name}'" for key_name in GLOBE_KEY_NAMES)
+            raise ElementNotFoundError(
+                f"select_keyboard: no globe key ({names}). Tap a text field first, "
+                "so that the keyboard shows."
+            )
+        return found[0]
+
+    def _long_press(self, element: Any) -> None:
+        rect = element.rect
+        x, y = int(rect["x"] + rect["width"] // 2), int(rect["y"] + rect["height"] // 2)
+        self._session.execute(
+            _W3C_ACTIONS, _pointer_actions(_move(x, y), _DOWN, _pause(self.keyboard_press_ms), _UP)
+        )
+
+    def _open_keyboard_menu(self) -> KeyboardMenu:
+        self._act_on_element(self._globe_key(), self._long_press, 0)
+        opened: list[KeyboardMenu] = []
+
+        def is_open() -> bool:
+            menu = self._read_keyboard_menu()
+            if isinstance(menu, KeyboardMenu):
+                opened.append(menu)
+            return isinstance(menu, KeyboardMenu)
+
+        if not self._wait_until(is_open):
+            raise DriverError(
+                "select_keyboard: the keyboard list did not open after a long press on the globe key"
+            )
+        return opened[-1]
+
+    def _close_keyboard_menu(self, menu: KeyboardMenu) -> None:
+        if menu.dismiss_point is None:
+            raise DriverError("select_keyboard: the keyboard list has no area to close it")
+        self.tap(*menu.dismiss_point)
+        if not self._wait_until(self._keyboard_menu_closed):
+            raise DriverError("select_keyboard: the keyboard list did not close")
+
+    def _read_keyboard_menu(self) -> KeyboardMenu | None | ET.ParseError:
+        """Return the open keyboard list, None when it is closed, or the parse error."""
+        try:
+            return parse_keyboard_menu(self._read_source())
+        except ET.ParseError as exc:
+            return exc
+
+    def _keyboard_menu_closed(self) -> bool:
+        return self._read_keyboard_menu() is None
+
+    def _wait_until(self, check: Callable[[], bool]) -> bool:
+        deadline = self.clock() + self.keyboard_menu_wait_ms / 1000
+        while True:
+            if check():
+                return True
+            remaining = deadline - self.clock()
+            if remaining <= 0:
+                return False
+            self.sleep(min(self.poll_ms / 1000, remaining))
 
     # -- AppLifecycleDriver ------------------------------------------------
 
