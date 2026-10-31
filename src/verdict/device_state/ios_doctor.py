@@ -223,18 +223,24 @@ class IosDevice:
 def devicectl_device_connected(device: dict[str, Any]) -> bool:
     """Return True if a `devicectl list devices` entry is connected now.
 
-    The field names and values come from Apple and Appium documentation. They
-    are not checked against real devicectl output, because this Mac has no
-    Xcode. A paired device that is not connected must not count.
+    Real output (Xcode 27, iOS 26) shows a reachable iPhone with a `transportType`
+    (`wired` or `localNetwork`) and `tunnelState: "disconnected"`. The tunnel
+    opens only when a tool uses the device. devicectl also lists Simulators,
+    also shut-down ones, with `reality: "simulated"` and `transportType:
+    "sameMachine"`. They are not iPhones, so they do not count.
     """
     connection = device.get("connectionProperties", {})
+    transport = connection.get("transportType")
+    reality = device.get("hardwareProperties", {}).get("reality")
+    if reality == "simulated" or transport == "sameMachine":
+        return False
     tunnel = connection.get("tunnelState")
     if tunnel == "connected":
         return True
     return (
         connection.get("pairingState") == "paired"
-        and bool(connection.get("transportType"))
-        and tunnel not in ("disconnected", "unavailable")
+        and bool(transport)
+        and tunnel != "unavailable"
     )
 
 

@@ -378,7 +378,7 @@ def test_baseline_and_restore_have_no_platform_option(tmp_path):
 
 # -- verdict doctor ios --------------------------------------------------------
 
-# A sample `devicectl list devices` entry. It is not real devicectl output (no Xcode here).
+# A short sample `devicectl list devices` entry. See _REAL_IPHONE for real output.
 _IPHONE = {
     "hardwareProperties": {"udid": "00008110-AAAA"},
     "deviceProperties": {"name": "Divy iPhone", "developerModeStatus": "enabled"},
@@ -655,9 +655,26 @@ def test_doctor_on_a_mac_with_only_the_command_line_tools(monkeypatch):
         ({"pairingState": "paired", "transportType": "localNetwork"}, True),
         ({"pairingState": "paired", "tunnelState": "disconnected"}, False),
         ({"pairingState": "paired", "tunnelState": "unavailable"}, False),
+        (
+            {"pairingState": "paired", "tunnelState": "unavailable", "transportType": "wired"},
+            False,
+        ),
         ({"pairingState": "paired"}, False),
+        # Real output: a reachable iPhone has a transport and a closed tunnel.
         (
             {"pairingState": "paired", "tunnelState": "disconnected", "transportType": "wired"},
+            True,
+        ),
+        (
+            {
+                "pairingState": "paired",
+                "tunnelState": "disconnected",
+                "transportType": "localNetwork",
+            },
+            True,
+        ),
+        (
+            {"pairingState": "paired", "tunnelState": "disconnected", "transportType": "sameMachine"},
             False,
         ),
         ({"pairingState": "unpaired", "transportType": "wired"}, False),
@@ -909,3 +926,63 @@ def test_doctor_ignores_a_team_id_that_is_overridden_with_an_empty_value(monkeyp
 def test_given_uses_the_last_alias_in_insertion_order(capabilities, given):
     key = next(iter(capabilities), "x").removeprefix("appium:")
     assert ios_doctor._given(capabilities, key) is given
+
+
+# Real `devicectl list devices` entries (Xcode 27.2, iOS 26.7.2), reduced to the
+# fields that the doctor reads. The names and the identifiers are replaced.
+_REAL_IPHONE = {
+    "identifier": "D63BE42A-0000-0000-0000-000000000000",
+    "connectionProperties": {
+        "authenticationType": "manualPairing",
+        "pairingState": "paired",
+        "transportType": "wired",
+        "tunnelState": "disconnected",
+        "tunnelTransportProtocol": "tcp",
+    },
+    "deviceProperties": {
+        "bootState": "booted",
+        "developerModeStatus": "enabled",
+        "name": "Test iPhone",
+        "osVersionNumber": "26.7.2",
+    },
+    "hardwareProperties": {
+        "deviceType": "iPhone",
+        "marketingName": "iPhone 13",
+        "platform": "iOS",
+        "reality": "physical",
+        "udid": "00008110-REALIPHONE",
+    },
+}
+_REAL_SHUTDOWN_SIMULATOR = {
+    "identifier": "9B7CD708-0000-0000-0000-000000000000",
+    "connectionProperties": {
+        "authenticationType": "implicit",
+        "pairingState": "paired",
+        "transportType": "sameMachine",
+        "tunnelState": "disconnected",
+    },
+    "deviceProperties": {
+        "bootState": "shutdown",
+        "name": "iPhone 15 Pro Max",
+        "provider": "com.apple.CoreSimulator.SimulatorCoreDevicePlugin",
+    },
+    "hardwareProperties": {
+        "deviceType": "iPhone",
+        "platform": "iOS",
+        "reality": "simulated",
+        "udid": "9B7CD708-0000-0000-0000-000000000000",
+    },
+}
+
+
+def test_doctor_finds_a_wired_iphone_in_real_devicectl_output(monkeypatch):
+    runner = _devicectl_runner(_REAL_IPHONE, _REAL_SHUTDOWN_SIMULATOR)
+    result = _invoke_doctor(monkeypatch, runner, args=["-s", "00008110-REALIPHONE"])
+    assert "OK   device: Test iPhone 00008110-REALIPHONE" in result.output
+    assert "OK   developer mode: enabled on Test iPhone 00008110-REALIPHONE" in result.output
+
+
+def test_doctor_does_not_count_a_shut_down_simulator_from_devicectl(monkeypatch):
+    result = _invoke_doctor(monkeypatch, _devicectl_runner(_REAL_SHUTDOWN_SIMULATOR))
+    assert result.exit_code == 2
+    assert "FAIL device: found no iPhone and no booted Simulator" in result.output
