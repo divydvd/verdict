@@ -1,6 +1,7 @@
 import os
 import subprocess
 import sys
+import urllib.request
 from pathlib import Path
 
 import pytest
@@ -177,3 +178,172 @@ class _FakeItem:
 )
 def test_device_access_is_allowed_only_for_opted_in_device_tests(keywords, run_device, allowed):
     assert guard._allows_device(_FakeItem(keywords, run_device)) is allowed
+
+
+_IOS_TOOLS = (
+    "xcode-select",
+    "xcodebuild",
+    "xcrun",
+    "appium",
+    "idevice_id",
+    "ideviceinstaller",
+    "idevicesyslog",
+    "pymobiledevice3",
+    "go-ios",
+    "ios",
+    "tidevice",
+)
+
+
+@pytest.fixture
+def fake_ios_tools(tmp_path, monkeypatch):
+    """Put fake iOS tools first on PATH. Each one writes a marker file if it ever starts."""
+    bin_dir = tmp_path / "fakebin"
+    bin_dir.mkdir()
+    markers = tmp_path / "started"
+    markers.mkdir()
+    for name in _IOS_TOOLS:
+        script = bin_dir / name
+        script.write_text(f"#!/bin/sh\ntouch '{markers / name}'\n")
+        script.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}/bin{os.pathsep}/usr/bin")
+    return markers
+
+
+@pytest.mark.parametrize("tool", _IOS_TOOLS)
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda tool: subprocess.run([tool, "--version"], check=False),
+        lambda tool: subprocess.run(f"{tool} --version", shell=True, check=False),
+        lambda tool: subprocess.run(["sh", "-c", f"true && {tool} list"], check=False),
+        lambda tool: subprocess.run(f"FOO=1 /usr/bin/env {tool} list", shell=True, check=False),
+        lambda tool: os.system(f"{tool} --version"),
+        lambda tool: os.popen(f"{tool} --version").read(),
+        lambda tool: os.spawnvp(os.P_WAIT, tool, [tool, "--version"]),
+    ],
+    ids=["run-list", "run-shell", "sh-c", "env", "os-system", "os-popen", "os-spawnvp"],
+)
+def test_ios_tools_are_blocked_without_run_device(fake_ios_tools, tool, call):
+    with pytest.raises(RealDeviceAccessError, match=f"run {tool} without --run-device"):
+        call(tool)
+    assert list(fake_ios_tools.iterdir()) == []
+
+
+def test_xcrun_subcommands_are_blocked(fake_ios_tools):
+    for command in (["xcrun", "devicectl", "list", "devices"], ["xcrun", "simctl", "list"]):
+        with pytest.raises(RealDeviceAccessError):
+            subprocess.run(command, check=False)
+    assert list(fake_ios_tools.iterdir()) == []
+
+
+@pytest.mark.parametrize("tool", _IOS_TOOLS)
+def test_ios_tools_run_inside_the_device_window(fake_ios_tools, monkeypatch, tool):
+    monkeypatch.setattr(guard, "_device_access_allowed", True)
+    assert subprocess.run([tool, "--version"], check=False).returncode == 0
+    assert (fake_ios_tools / tool).exists()
+
+
+def test_ios_tools_run_in_an_opted_in_device_test(pytester, fake_ios_tools):
+    pytester.makeconftest(_ROOT_CONFTEST.read_text())
+    pytester.makepyfile(
+        f"""
+        import subprocess
+
+        import pytest
+
+        TOOLS = {list(_IOS_TOOLS)!r}
+
+        @pytest.mark.requires_device
+        def test_on_phone():
+            for tool in TOOLS:
+                assert subprocess.run([tool, "--version"], check=False).returncode == 0
+
+        def test_not_on_phone():
+            with pytest.raises(AssertionError, match="without --run-device"):
+                subprocess.run(["xcrun", "devicectl", "list", "devices"], check=False)
+        """
+    )
+    # The tools on PATH are the fake scripts, so no real tool starts.
+    result = pytester.runpytest_subprocess("-p", "no:cacheprovider", "--run-device")
+    result.assert_outcomes(passed=2)
+    assert sorted(path.name for path in fake_ios_tools.iterdir()) == sorted(_IOS_TOOLS)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        ["echo", "verdict", "run", "--platform", "ios"],
+        "echo verdict run --platform ios",
+        "echo ios | cat",
+        ["sh", "-c", "echo ios > /dev/null"],
+        "true > ios",
+    ],
+)
+def test_ios_as_an_argument_is_not_blocked(fake_ios_tools, tmp_path, monkeypatch, command):
+    monkeypatch.chdir(tmp_path)
+    shell = isinstance(command, str)
+    result = subprocess.run(command, shell=shell, check=False, capture_output=True)
+    assert result.returncode == 0
+    assert list(fake_ios_tools.iterdir()) == []
+
+
+@pytest.mark.parametrize(
+    ("command", "executables"),
+    [
+        (["verdict", "run", "--platform", "ios"], ["verdict"]),
+        ("cd /tmp && ios list; echo ios", ["cd", "ios", "echo"]),
+        ("sudo -E env A=1 ios list | grep ios", ["ios", "grep"]),
+        (["bash", "-c", "FOO=1 /usr/local/bin/ios list"], ["bash", "/usr/local/bin/ios"]),
+        ("cat < ios", ["cat"]),
+    ],
+)
+def test_executable_words_find_only_programs(command, executables):
+    assert guard._command_executables(command) == executables
+
+
+def test_appium_remote_is_blocked():
+    from appium import webdriver
+
+    with pytest.raises(RealDeviceAccessError, match="Appium session"):
+        webdriver.Remote("http://127.0.0.1:4723")
+
+
+def test_appium_webdriver_class_is_blocked():
+    from appium.webdriver.webdriver import WebDriver
+
+    with pytest.raises(RealDeviceAccessError, match="Appium session"):
+        WebDriver("http://10.0.0.2:4723")
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://127.0.0.1:4723/status",
+        "http://localhost:4723/status",
+        "http://[::1]:4723/status",
+        "http://0.0.0.0:4723/status",
+        "http://127.0.0.2:8100/status",
+    ],
+)
+def test_appium_status_probe_is_blocked(url):
+    from verdict.device_state import ios_doctor
+
+    with pytest.raises(RealDeviceAccessError, match="loopback URL"):
+        ios_doctor.urllib_get(url)
+    with pytest.raises(RealDeviceAccessError, match="loopback URL"):
+        urllib.request.urlopen(urllib.request.Request(url))
+
+
+def test_doctor_default_probe_is_blocked():
+    from verdict.device_state import ios_doctor
+
+    with pytest.raises(RealDeviceAccessError):
+        ios_doctor.check_appium_server("http://127.0.0.1:4723", ios_doctor.urllib_get)
+
+
+def test_urlopen_without_a_loopback_host_is_not_blocked():
+    with urllib.request.urlopen("data:,hello") as response:
+        assert response.read() == b"hello"
+    assert not guard._is_loopback_host("10.0.0.2")
+    assert not guard._is_loopback_host("example.com")

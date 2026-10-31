@@ -38,7 +38,7 @@ packages = ["src/verdict"]
 
 [tool.pytest.ini_options]
 markers = [
-    "requires_device: test needs a real Android device/emulator attached via adb",
+    "requires_device: test needs a real Android device (through adb) or a real iOS device (through Appium)",
 ]
 testpaths = ["tests"]
 
