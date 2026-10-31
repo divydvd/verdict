@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import uuid
 from collections.abc import Callable
 from contextlib import suppress
@@ -166,14 +167,62 @@ def _parse_app(raw: str) -> tuple[str, str]:
     return bundle_id, str(app)
 
 
+# Appium wants text for these keys, also when the value looks like a number or a boolean.
+_STRING_CAPABILITIES = frozenset(
+    {
+        "platformVersion",
+        "xcodeOrgId",
+        "xcodeSigningId",
+        "udid",
+        "bundleId",
+        "app",
+        "deviceName",
+        "automationName",
+        "platformName",
+        "updatedWDABundleId",
+        "xcodeConfigFile",
+        "webDriverAgentUrl",
+    }
+)
+
+
+class _NonFiniteError(ValueError):
+    pass
+
+
+def _refuse_constant(name: str) -> Any:
+    raise _NonFiniteError(f"{name} is not a valid capability value")
+
+
+def _check_finite(value: Any, raw: str, hint: str) -> None:
+    if isinstance(value, float) and not math.isfinite(value):
+        raise click.BadParameter(f"{raw!r} contains inf or nan", param_hint=hint)
+    if isinstance(value, dict):
+        for item in value.values():
+            _check_finite(item, raw, hint)
+    elif isinstance(value, list):
+        for item in value:
+            _check_finite(item, raw, hint)
+
+
 def _parse_capability(raw: str) -> tuple[str, Any]:
+    """Parse KEY=VALUE. Only true, false, null, an integer, an object, or an array is
+    parsed as JSON. Other values, and the values of known text keys, stay text."""
     key, text = raw.split("=", 1) if "=" in raw else ("", "")
     if not key:
         raise click.BadParameter(f"expected KEY=VALUE, got {raw!r}", param_hint="--capability")
+    if key.removeprefix("appium:") in _STRING_CAPABILITIES:
+        return key, text
     try:
-        return key, json.loads(text)
+        value = json.loads(text, parse_constant=_refuse_constant)
+    except _NonFiniteError as exc:
+        raise click.BadParameter(f"{raw!r}: {exc}", param_hint="--capability") from exc
     except ValueError:
         return key, text
+    if isinstance(value, (float, str)):
+        return key, text
+    _check_finite(value, raw, "--capability")
+    return key, value
 
 
 def load_capabilities(path: Path | None, pairs: tuple[str, ...]) -> dict[str, Any]:
@@ -211,7 +260,9 @@ def _capability_options(func: _F) -> _F:
         multiple=True,
         metavar="KEY=VALUE",
         help="An Appium capability (iOS only), for example appium:xcodeOrgId=TEAMID. "
-        "A JSON value (true, 8100) is parsed. It overrides --capabilities-file. "
+        "true, false, null, an integer, a JSON object, and a JSON array are parsed; other "
+        "values stay text. Known text keys (platformVersion, xcodeOrgId, udid, ...) always "
+        "stay text. It overrides --capabilities-file. "
         "May be passed multiple times.",
     )(func)
     return func

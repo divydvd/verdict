@@ -212,6 +212,67 @@ def test_malformed_capability_is_a_usage_error(tmp_path, ios_calls):
     assert "expected KEY=VALUE" in result.output
 
 
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("appium:showXcodeLog=true", True),
+        ("appium:showXcodeLog=false", False),
+        ("appium:x=null", None),
+        ("appium:wdaLocalPort=8100", 8100),
+        ("appium:offset=-5", -5),
+        ('appium:processArguments={"args": ["-a"], "scale": 1.5}', {"args": ["-a"], "scale": 1.5}),
+        ("appium:list=[1, 2]", [1, 2]),
+        ("appium:timeout=17.4", "17.4"),
+        ("appium:timeout=1e3", "1e3"),
+        ("appium:name=plain text", "plain text"),
+        ('appium:quoted="x"', '"x"'),
+        ("appium:platformVersion=17.4", "17.4"),
+        ("appium:platformVersion=17", "17"),
+        ("platformVersion=17", "17"),
+        ("appium:xcodeOrgId=5E12345678", "5E12345678"),
+        ("appium:xcodeOrgId=1234567890", "1234567890"),
+        ("xcodeOrgId=1234567890", "1234567890"),
+        ("appium:xcodeSigningId=true", "true"),
+        ("appium:udid=00008110", "00008110"),
+        ("appium:bundleId=null", "null"),
+        ("appium:app=123", "123"),
+        ("appium:deviceName=1", "1"),
+        ("appium:automationName=false", "false"),
+        ("platformName=1", "1"),
+        ("appium:updatedWDABundleId=123", "123"),
+        ("appium:xcodeConfigFile=1", "1"),
+        ("appium:webDriverAgentUrl=8100", "8100"),
+        ("appium:xcodeOrgId=NaN", "NaN"),
+    ],
+)
+def test_capability_value_parsing(raw, expected):
+    key, value = cli._parse_capability(raw)
+    assert key == raw.split("=", 1)[0]
+    assert value == expected
+    assert type(value) is type(expected)
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "appium:x=NaN",
+        "appium:x=Infinity",
+        "appium:x=-Infinity",
+        "appium:x=[1, NaN]",
+        'appium:x={"a": {"b": Infinity}}',
+        "appium:x=[1e999]",
+        'appium:x={"a": [-1e999]}',
+    ],
+)
+def test_non_finite_capability_is_a_usage_error(tmp_path, ios_calls, raw):
+    result = CliRunner().invoke(
+        cli.main, ["run", str(_scenario(tmp_path)), "--platform", "ios", "--capability", raw]
+    )
+    assert result.exit_code == 2, result.output
+    assert "--capability" in result.output
+    assert ios_calls[0] == []
+
+
 def test_ios_connection_error_in_a_step_is_blocked_and_closes_the_session(tmp_path, monkeypatch):
     class _Dropping(_ClosingDriver):
         def wait_for(self, selector, timeout_ms=5000):

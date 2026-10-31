@@ -96,9 +96,12 @@ verdict run scenario.yaml --platform ios --device UDID --app bha.keys.smartype=/
 - `--appium-url` sets the server URL. `--app BUNDLE_ID=PATH` gives the app file for `clear_data`.
   PATH must be an `.app` folder or an `.ipa` file on this Mac, else the run stops (exit 2).
   You can give `--app` more than one time.
-- `--capability KEY=VALUE` gives one Appium capability. A JSON value (`true`, `8100`) is parsed;
-  other values stay text. `--capabilities-file PATH` reads a JSON object. A `--capability` value
-  overrides the file value. A real iPhone needs WDA signing, for example:
+- `--capability KEY=VALUE` gives one Appium capability. `true`, `false`, `null`, an integer
+  (`8100`), a JSON object, and a JSON array are parsed. Other values stay text, also floats such as
+  `17.4`. Known text keys always stay text, with or without the `appium:` prefix: for example
+  `platformVersion`, `xcodeOrgId`, `xcodeSigningId`, `udid`, and `bundleId`. A value with inf or
+  nan (also `Infinity` or `NaN`) is a usage error (exit 2). `--capabilities-file PATH` reads a JSON
+  object. A `--capability` value overrides the file value. A real iPhone needs WDA signing, for example:
   `--capability appium:xcodeOrgId=TEAMID --capability "appium:xcodeSigningId=Apple Development"`.
 - `--app`, `--capability`, and `--capabilities-file` are usage errors on Android.
 - Exit 0: PASSED. Exit 1: FAILED. Exit 2: BLOCKED (the connection failed, or the iOS extra is not
