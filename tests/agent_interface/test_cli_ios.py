@@ -986,3 +986,31 @@ def test_doctor_does_not_count_a_shut_down_simulator_from_devicectl(monkeypatch)
     result = _invoke_doctor(monkeypatch, _devicectl_runner(_REAL_SHUTDOWN_SIMULATOR))
     assert result.exit_code == 2
     assert "FAIL device: found no iPhone and no booted Simulator" in result.output
+
+
+_REAL_WIFI_IPHONE = {
+    **_REAL_IPHONE,
+    "connectionProperties": {
+        **_REAL_IPHONE["connectionProperties"],
+        "transportType": "localNetwork",
+    },
+}
+
+
+@pytest.mark.parametrize("args", [(), ("-s", "00008110-REALIPHONE")])
+def test_doctor_fails_for_an_iphone_on_wifi_only(monkeypatch, args):
+    result = _invoke_doctor(monkeypatch, _devicectl_runner(_REAL_WIFI_IPHONE), args=list(args))
+    assert result.exit_code == 2
+    assert (
+        "FAIL device: connected over Wi-Fi only: Test iPhone 00008110-REALIPHONE. "
+        "Appium cannot use an iPhone over Wi-Fi"
+    ) in result.output
+    assert "fix: Connect the iPhone with a USB cable" in result.output
+
+
+def test_check_device_lists_only_the_usable_devices():
+    wifi = ios_doctor.IosDevice("WIFI", "Wi-Fi iPhone", wifi_only=True)
+    simulator = ios_doctor.IosDevice("SIM", "iPhone 15 (Simulator)", simulator=True)
+    check = ios_doctor.check_device([wifi, simulator], None)
+    assert check.status is ios_doctor.CheckStatus.OK
+    assert check.detail == "iPhone 15 (Simulator) SIM"

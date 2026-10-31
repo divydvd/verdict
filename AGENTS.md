@@ -19,6 +19,20 @@ This file gives guidance to coding agents (Copilot, Claude Code, and others) whe
 None known.
 
 ## Rules
-- The working branch is `phase-1/core-execution-substrate` (the default branch). Base each PR on it, or on the PR below it in a stack.
+- The working branch is `main` (the default branch). Base each PR on it, or on the PR below it in a stack.
 - `~/verdict` is the checkout that SmarType agents run. Do not change its branch.
 - The architecture and the module limits: `docs/architecture.md` and `docs/adr/`.
+
+## iOS device tests
+The owner's Mac has Xcode, Appium 3 with the `xcuitest` driver, and `ffmpeg`. The README section "iOS device tests" gives all the options.
+1. Install the iOS extra once: `.venv/bin/pip install -e '.[dev,ios]'`.
+2. Start the Appium server as a background process: `appium`. It listens at `http://127.0.0.1:4723`.
+3. Check the setup: `.venv/bin/verdict doctor ios --capabilities-file ~/.verdict/ios-capabilities.json`. Exit 0 means ready. The output gives the iPhone UDID. Appium needs a USB cable; an iPhone on Wi-Fi only gives a FAIL.
+4. Run a scenario: `.venv/bin/verdict run scenario.yaml --platform ios --device UDID --capabilities-file ~/.verdict/ios-capabilities.json`.
+5. After the run, stop Appium. Also stop any `xcodebuild` process for `WebDriverAgent` that is still running.
+
+Notes:
+- `~/.verdict/ios-capabilities.json` has the WDA signing capabilities. It is outside the repository. Do not commit its team ID.
+- The first run takes about 1 minute, because Appium builds and installs WebDriverAgent on the iPhone.
+- The free signing profile expires after 7 days. The next run signs WebDriverAgent again.
+- The iPhone must be connected and unlocked. `launch` opens the app in its last state; it does not restart the app.
