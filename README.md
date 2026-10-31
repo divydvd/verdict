@@ -75,8 +75,8 @@ verdict doctor ios [--device UDID] [--appium-url http://127.0.0.1:4723] \
 - It checks Xcode, `appium`, the `xcuitest` driver, the Appium server, `ffmpeg`, the iPhone or
   booted Simulator, Developer Mode, WDA signing, and the iOS extra.
 - Give it the same capabilities as `verdict run`. Then the WDA signing check can read
-  `appium:xcodeOrgId`, `appium:xcodeConfigFile`, `appium:updatedWDABundleId`, or
-  `appium:usePreinstalledWDA`.
+  `appium:xcodeOrgId`, `appium:xcodeConfigFile`, or `appium:usePreinstalledWDA`.
+  `appium:updatedWDABundleId` alone does not sign WDA, so it gives a `WARN`.
 - It cannot read the UI Automation setting. It prints an `INFO` line: turn on
   Settings > Developer > Enable UI Automation on the iPhone.
 - It prints one line for each check (`OK`, `INFO`, `WARN`, or `FAIL`) and a fix for each problem.
@@ -94,6 +94,7 @@ verdict run scenario.yaml --platform ios --device UDID --app bha.keys.smartype=/
 - `--platform` is `android` by default. On iOS, `--device` is the UDID of the iPhone or the
   Simulator.
 - `--appium-url` sets the server URL. `--app BUNDLE_ID=PATH` gives the app file for `clear_data`.
+  PATH must be an `.app` folder or an `.ipa` file on this Mac, else the run stops (exit 2).
   You can give `--app` more than one time.
 - `--capability KEY=VALUE` gives one Appium capability. A JSON value (`true`, `8100`) is parsed;
   other values stay text. `--capabilities-file PATH` reads a JSON object. A `--capability` value
