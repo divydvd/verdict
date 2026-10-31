@@ -27,7 +27,16 @@ class InputDriver(Protocol):
 
     def swipe(self, x1: int, y1: int, x2: int, y2: int, duration_ms: int = 300) -> None: ...
 
-    def scroll(self, direction: Direction, selector: Selector | None = None) -> None: ...
+    def scroll(self, direction: Direction, selector: Selector | None = None) -> None:
+        """Scroll in `direction`. The meaning depends on `selector`:
+
+        - No selector: swipe the screen. `direction` is the direction of the
+          finger, so UP shows the content below.
+        - With a selector: scroll that element. `direction` is the content to
+          show, so DOWN shows the content below and RIGHT the content to the
+          right.
+        """
+        ...
 
     def type_text(self, text: str) -> None: ...
 

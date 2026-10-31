@@ -54,20 +54,35 @@ def _optional_connection_errors() -> tuple[type[BaseException], ...]:
     except ImportError:
         pass
     try:
-        from selenium.common.exceptions import (
-            InvalidSessionIdException,
-            NoSuchDriverException,
-            SessionNotCreatedException,
-        )
+        from selenium.common.exceptions import WebDriverException
 
-        errors.extend((InvalidSessionIdException, NoSuchDriverException, SessionNotCreatedException))
+        errors.append(WebDriverException)
     except ImportError:
         pass
     return tuple(errors)
 
 
+class _NeverRaised(Exception):
+    """Stands in for a Selenium error when Selenium is not installed."""
+
+
+def _selenium_error(name: str) -> type[Exception]:
+    try:
+        from selenium.common import exceptions
+    except ImportError:
+        return _NeverRaised
+    return cast(type[Exception], getattr(exceptions, name))
+
+
+_NO_SUCH_ELEMENT = _selenium_error("NoSuchElementException")
+_STALE_ELEMENT = _selenium_error("StaleElementReferenceException")
+
+
 # Errors that mean the Appium server, WebDriverAgent, or the device connection
 # failed. They are not test results, so the CLI reports BLOCKED for them.
+# `WebDriverException` is the base of all Selenium errors. Thus the driver must
+# change test-result errors (a missing or stale element) into
+# `ElementNotFoundError` before they leave the driver.
 IOS_CONNECTION_ERRORS: tuple[type[BaseException], ...] = (
     ConnectionError,
     http.client.HTTPException,
@@ -169,6 +184,8 @@ class IosAppiumDriver:
     driver. WebDriverAgent on the device does the UI operations. Apps are
     identified by their bundle id.
 
+    XCUITest bounds and taps use points, not screenshot pixels.
+
     The Appium client is optional (the `ios` extra). The driver imports it
     only when it opens a real session. Tests give a `session_factory` that
     returns a fake session.
@@ -213,10 +230,32 @@ class IosAppiumDriver:
         self._session.quit()
 
     def _find(self, selector: Selector) -> Any | None:
-        elements = self._session.find_elements(*to_ios_locator(selector))
+        try:
+            elements = self._session.find_elements(*to_ios_locator(selector))
+        except _NO_SUCH_ELEMENT:
+            return None
         return elements[0] if elements else None
 
+    def _act_on_element(
+        self, selector: Selector, action: Callable[[Any], None], timeout_ms: int
+    ) -> None:
+        # The element can change between the lookup and the action. Find it
+        # again one time. A second stale element is a test result, not a
+        # connection failure.
+        for attempt in range(2):
+            element = self._find_with_wait(selector, timeout_ms if attempt == 0 else 0)
+            if element is None:
+                raise ElementNotFoundError(f"No element matching {selector!r}")
+            try:
+                action(element)
+                return
+            except _STALE_ELEMENT:
+                continue
+        raise ElementNotFoundError(f"Element matching {selector!r} went stale two times")
+
     def _find_with_wait(self, selector: Selector, timeout_ms: int) -> Any | None:
+        if timeout_ms <= 0:
+            return self._find(selector)
         for _ in range(max(1, timeout_ms // self.poll_ms)):
             element = self._find(selector)
             if element is not None:
@@ -235,10 +274,7 @@ class IosAppiumDriver:
         )
 
     def tap_selector(self, selector: Selector) -> None:
-        element = self._find_with_wait(selector, self.tap_wait_ms)
-        if element is None:
-            raise ElementNotFoundError(f"No element matching {selector!r}")
-        element.click()
+        self._act_on_element(selector, lambda element: element.click(), self.tap_wait_ms)
 
     def swipe(self, x1: int, y1: int, x2: int, y2: int, duration_ms: int = 300) -> None:
         self._session.execute(
@@ -246,13 +282,19 @@ class IosAppiumDriver:
         )
 
     def scroll(self, direction: Direction, selector: Selector | None = None) -> None:
-        args: dict[str, Any] = {"direction": direction.value}
-        if selector is not None:
-            element = self._find(selector)
-            if element is None:
-                raise ElementNotFoundError(f"No element matching {selector!r}")
-            args["elementId"] = element.id
-        self._session.execute_script("mobile: scroll", args)
+        if selector is None:
+            # Like Android `swipe_ext`: the direction of the finger.
+            self._session.execute_script("mobile: swipe", {"direction": direction.value})
+            return
+        # `mobile: scroll` gives the content to show, so DOWN shows the content
+        # below, like Android `scroll.forward`.
+        self._act_on_element(
+            selector,
+            lambda element: self._session.execute_script(
+                "mobile: scroll", {"direction": direction.value, "elementId": element.id}
+            ),
+            0,
+        )
 
     def type_text(self, text: str) -> None:
         self._send_to_focused(text)
