@@ -70,3 +70,40 @@ def test_missing_or_bad_geometry_gives_no_bounds():
 def test_bad_xml_raises_parse_error():
     with pytest.raises(ET.ParseError):
         parse_ios_hierarchy_xml("<AppiumAUT>")
+
+
+@pytest.mark.parametrize(
+    "element_type",
+    [
+        "XCUIElementTypeTextField",
+        "XCUIElementTypeSecureTextField",
+        "XCUIElementTypeSearchField",
+        "XCUIElementTypeTextView",
+    ],
+)
+def test_empty_text_field_does_not_report_its_placeholder(element_type):
+    root = parse_ios_hierarchy_xml(
+        f'<{element_type} type="{element_type}" label="Message" '
+        'value="Type here" placeholderValue="Type here"/>'
+    )
+    assert root is not None
+    assert root.text == ""
+    assert root.content_desc == "Message"
+
+
+def test_text_field_with_typed_text_keeps_the_value():
+    root = parse_ios_hierarchy_xml(
+        '<XCUIElementTypeTextField type="XCUIElementTypeTextField" '
+        'value="hello" placeholderValue="Type here"/>'
+    )
+    assert root is not None
+    assert root.text == "hello"
+
+
+def test_other_types_keep_a_value_equal_to_the_placeholder():
+    root = parse_ios_hierarchy_xml(
+        '<XCUIElementTypeStaticText type="XCUIElementTypeStaticText" '
+        'value="Type here" placeholderValue="Type here"/>'
+    )
+    assert root is not None
+    assert root.text == "Type here"

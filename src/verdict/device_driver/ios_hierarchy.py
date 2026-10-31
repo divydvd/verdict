@@ -10,6 +10,14 @@ _APPIUM_ROOT_TAG = "AppiumAUT"
 # XCUITest element types that show an on/off state in their `value` ("1" or "0").
 SWITCH_TYPES = frozenset({"XCUIElementTypeSwitch", "XCUIElementTypeToggle"})
 
+# XCUITest element types that report their placeholder as the value when empty.
+TEXT_INPUT_TYPES = frozenset({
+    "XCUIElementTypeTextField",
+    "XCUIElementTypeSecureTextField",
+    "XCUIElementTypeSearchField",
+    "XCUIElementTypeTextView",
+})
+
 
 def _int_attr(attrib: dict[str, str], name: str) -> int | None:
     raw = attrib.get(name)
@@ -35,8 +43,15 @@ def _node_from_element(element: ET.Element) -> UiNode:
     label = attrib.get("label") or None
     value = attrib.get("value") or None
     checkable = class_name in SWITCH_TYPES
-    # The value of a switch is its state, not its text. Use the label as the text.
-    text = label if checkable else (value or label)
+    text: str | None
+    if checkable:
+        # The value of a switch is its state, not its text. Use the label as the text.
+        text = label
+    elif class_name in TEXT_INPUT_TYPES and value is not None and value == attrib.get("placeholderValue"):
+        # An empty text field reports its placeholder as its value.
+        text = ""
+    else:
+        text = value or label
     return UiNode(
         resource_id=attrib.get("name") or None,
         text=text,
@@ -54,7 +69,8 @@ def parse_ios_hierarchy_xml(raw_xml: str) -> UiNode | None:
 
     The attributes map as follows: `name` to `resource_id`, `label` to
     `content_desc`, `value` (or else `label`) to `text`, `type` to
-    `class_name`, and `x`, `y`, `width`, `height` to `bounds`. A switch is
+    `class_name`, and `x`, `y`, `width`, `height` to `bounds`. An empty text
+    field (its `value` is its `placeholderValue`) has an empty text. A switch is
     checkable. Its `value` "1" means checked. Returns None when the page
     source has no element.
 
