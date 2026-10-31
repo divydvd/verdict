@@ -31,7 +31,7 @@ _XCODE_SELECT_FIX = (
 _DEVELOPER_MODE_FIX = (
     "On the iPhone, turn on Settings > Privacy & Security > Developer Mode, then restart it"
 )
-_WDA_SIGNING_KEYS = ("xcodeOrgId", "updatedWDABundleId", "usePreinstalledWDA")
+_WDA_SIGNING_KEYS = ("xcodeOrgId", "xcodeConfigFile", "updatedWDABundleId", "usePreinstalledWDA")
 _DEVICE_FIX = (
     "Connect the iPhone with a cable and trust this Mac, "
     "or boot a Simulator: xcrun simctl boot <UDID>"
@@ -108,10 +108,20 @@ def _first_line(text: str) -> str:
     return next((line.strip() for line in text.splitlines() if line.strip()), "")
 
 
+def _failed(command: Sequence[str], result: CommandResult) -> str:
+    # The command started, so it is not missing. Show why it failed.
+    reason = _first_line(result.stderr) or _first_line(result.stdout) or "no output"
+    return f"`{' '.join(command)}` failed with exit code {result.returncode}: {reason}"
+
+
 def check_xcode(runner: CommandRunner) -> Check:
     selected = _run(runner, ["xcode-select", "-p"])
-    if selected is None or selected.returncode != 0:
-        return Check("xcode", CheckStatus.FAIL, "xcode-select found no developer folder", _XCODE_SELECT_FIX)
+    if selected is None:
+        return Check("xcode", CheckStatus.FAIL, "xcode-select is missing", _XCODE_SELECT_FIX)
+    if selected.returncode != 0:
+        return Check(
+            "xcode", CheckStatus.FAIL, _failed(["xcode-select", "-p"], selected), _XCODE_SELECT_FIX
+        )
     path = selected.stdout.strip()
     if _COMMAND_LINE_TOOLS in path:
         return Check(
@@ -121,12 +131,13 @@ def check_xcode(runner: CommandRunner) -> Check:
             _XCODE_SELECT_FIX,
         )
     version = _run(runner, ["xcodebuild", "-version"])
-    if version is None or version.returncode != 0:
-        reason = _first_line(version.output) if version else "xcodebuild is not found"
+    if version is None:
+        return Check("xcode", CheckStatus.FAIL, "xcodebuild is missing", _XCODE_SELECT_FIX)
+    if version.returncode != 0:
         return Check(
             "xcode",
             CheckStatus.FAIL,
-            f"xcodebuild -version failed: {reason}",
+            _failed(["xcodebuild", "-version"], version),
             "Accept the license: sudo xcodebuild -license accept. Then run: "
             "sudo xcodebuild -runFirstLaunch",
         )
@@ -136,19 +147,37 @@ def check_xcode(runner: CommandRunner) -> Check:
 def check_appium(runner: CommandRunner) -> list[Check]:
     version = _run(runner, ["appium", "--version"])
     if version is None or version.returncode != 0:
+        detail = (
+            "appium is missing from PATH"
+            if version is None
+            else _failed(["appium", "--version"], version)
+        )
+        fix = "npm i -g appium" if version is None else "Repair the appium install: npm i -g appium"
         return [
-            Check("appium", CheckStatus.FAIL, "appium is not on PATH", "npm i -g appium"),
+            Check("appium", CheckStatus.FAIL, detail, fix),
             Check(
                 "xcuitest driver",
                 CheckStatus.FAIL,
-                "appium is not on PATH",
+                "cannot check without a working appium",
                 "Install appium, then run: appium driver install xcuitest",
             ),
         ]
     appium = Check("appium", CheckStatus.OK, f"appium {_first_line(version.stdout)}")
-    drivers = _run(runner, ["appium", "driver", "list", "--installed"])
+    list_command = ["appium", "driver", "list", "--installed"]
+    drivers = _run(runner, list_command)
+    if drivers is None or drivers.returncode != 0:
+        detail = "appium is missing from PATH" if drivers is None else _failed(list_command, drivers)
+        return [
+            appium,
+            Check(
+                "xcuitest driver",
+                CheckStatus.FAIL,
+                detail,
+                "Run `appium driver list --installed` and repair the error",
+            ),
+        ]
     # Appium writes the driver list to stderr.
-    if drivers is None or drivers.returncode != 0 or "xcuitest" not in drivers.output.lower():
+    if "xcuitest" not in drivers.output.lower():
         return [
             appium,
             Check(
@@ -340,7 +369,8 @@ def check_wda_signing(
     return Check(
         "wda signing",
         CheckStatus.WARN,
-        "no appium:xcodeOrgId, appium:updatedWDABundleId, or appium:usePreinstalledWDA is given",
+        "no appium:xcodeOrgId, appium:xcodeConfigFile, appium:updatedWDABundleId, "
+        "or appium:usePreinstalledWDA is given",
         "Give your Apple team id: --capability appium:xcodeOrgId=TEAMID "
         '--capability "appium:xcodeSigningId=Apple Development"',
     )
@@ -348,12 +378,19 @@ def check_wda_signing(
 
 def check_ffmpeg(runner: CommandRunner) -> Check:
     result = _run(runner, ["ffmpeg", "-version"])
-    if result is None or result.returncode != 0:
+    if result is None:
         return Check(
             "ffmpeg",
             CheckStatus.WARN,
-            "ffmpeg is not on PATH; screen recording on a real iPhone needs it",
+            "ffmpeg is missing from PATH; screen recording on a real iPhone needs it",
             "brew install ffmpeg",
+        )
+    if result.returncode != 0:
+        return Check(
+            "ffmpeg",
+            CheckStatus.WARN,
+            _failed(["ffmpeg", "-version"], result),
+            "Repair the ffmpeg install: brew reinstall ffmpeg",
         )
     return Check("ffmpeg", CheckStatus.OK, _first_line(result.stdout))
 
