@@ -276,28 +276,55 @@ def test_ios_tools_run_in_an_opted_in_device_test(pytester, fake_ios_tools):
     "command",
     [
         ["echo", "verdict", "run", "--platform", "ios"],
-        "echo verdict run --platform ios",
-        "echo ios | cat",
-        ["sh", "-c", "echo ios > /dev/null"],
-        "true > ios",
+        ["env", "A=1", "echo", "ios"],
+        ["echo", "IOS", "ios.exe"],
+        ("echo", "ios"),
+        iter(["echo", "--platform", "ios"]),
     ],
+    ids=["verdict-run", "env", "case", "tuple", "iterator"],
 )
-def test_ios_as_an_argument_is_not_blocked(fake_ios_tools, tmp_path, monkeypatch, command):
-    monkeypatch.chdir(tmp_path)
-    shell = isinstance(command, str)
-    result = subprocess.run(command, shell=shell, check=False, capture_output=True)
+def test_ios_as_an_argument_in_an_argument_list_is_not_blocked(fake_ios_tools, command):
+    result = subprocess.run(command, check=False, capture_output=True)
     assert result.returncode == 0
     assert list(fake_ios_tools.iterdir()) == []
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "echo verdict run --platform ios",
+        "echo ios | cat",
+        "true > ios",
+        'echo "$(ios list)"',
+        "echo `ios list`",
+        "{ ios list; }",
+        "if true; then ios list; fi",
+        "! ios list",
+        "(ios list)",
+        "while false; do ios list; done",
+        "case x in x) ios list;; esac",
+        "f() { ios list; }; f",
+        "i\\os list",
+        "'i''os' list",
+        "IOS list",
+        "/usr/local/bin/ios.exe list",
+    ],
+)
+def test_shell_strings_with_the_word_ios_fail_closed(fake_ios_tools, command):
+    _assert_ios_is_blocked(command, fake_ios_tools, shell=True, tool=None)
+    _assert_ios_is_blocked(["sh", "-c", command], fake_ios_tools, tool=None)
+    _assert_ios_is_blocked(["bash", "-ec", command], fake_ios_tools, tool=None)
+    with pytest.raises(RealDeviceAccessError):
+        os.system(command)
 
 
 @pytest.mark.parametrize(
     ("command", "executables"),
     [
         (["verdict", "run", "--platform", "ios"], ["verdict"]),
-        ("cd /tmp && ios list; echo ios", ["cd", "ios", "echo"]),
-        ("sudo -E env A=1 ios list | grep ios", ["ios", "grep"]),
-        (["bash", "-c", "FOO=1 /usr/local/bin/ios list"], ["bash", "/usr/local/bin/ios"]),
-        ("cat < ios", ["cat"]),
+        (["sudo", "-E", "env", "A=1", "ios", "list"], ["ios"]),
+        (["bash", "-c", "FOO=1 /usr/local/bin/ios list"], ["bash"]),
+        ("ios list", []),
     ],
 )
 def test_executable_words_find_only_programs(command, executables):
@@ -359,8 +386,9 @@ def test_doctor_ffmpeg_version_check_is_blocked(fake_ios_tools):
     assert list(fake_ios_tools.iterdir()) == []
 
 
-def _assert_ios_is_blocked(command, fake_ios_tools, **kwargs):
-    with pytest.raises(RealDeviceAccessError, match="run ios without --run-device"):
+def _assert_ios_is_blocked(command, fake_ios_tools, tool="ios", **kwargs):
+    match = f"run {tool} without --run-device" if tool else "without --run-device"
+    with pytest.raises(RealDeviceAccessError, match=match):
         subprocess.run(command, check=False, capture_output=True, **kwargs)
     assert list(fake_ios_tools.iterdir()) == []
 
@@ -397,7 +425,8 @@ def test_a_newline_separates_shell_commands(fake_ios_tools, command):
 )
 def test_wrapper_options_with_values_do_not_hide_the_executable(command):
     assert "ios" in guard._command_executables(command)
-    assert "ios" in guard._command_executables(shlex.join(command))
+    assert guard._device_tool_in(command) == "ios"
+    assert guard._device_tool_in(shlex.join(command)) == "ios"
 
 
 def test_wrapper_option_with_a_value_is_blocked(fake_ios_tools):
@@ -432,3 +461,67 @@ def test_a_numbered_redirection_before_the_command_is_blocked(fake_ios_tools, co
 )
 def test_combined_shell_options_with_c_are_blocked(fake_ios_tools, command):
     _assert_ios_is_blocked(command, fake_ios_tools)
+
+
+def _iterator_of(command):
+    return (word for word in command)
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda: subprocess.run(_iterator_of(["ios", "list"]), check=False),
+        lambda: subprocess.run(_iterator_of(["xcrun", "simctl", "list"]), check=False),
+        lambda: subprocess.Popen(map(str, ["adb", "devices"])),
+        lambda: os.posix_spawnp("true", _iterator_of(["sh", "-c", "ios list"]), dict(os.environ)),
+    ],
+    ids=["generator-ios", "generator-xcrun", "map-adb", "spawn-generator"],
+)
+def test_an_iterator_command_is_checked(fake_ios_tools, call):
+    with pytest.raises(RealDeviceAccessError):
+        call()
+    assert list(fake_ios_tools.iterdir()) == []
+
+
+def test_an_iterator_command_still_runs_after_the_check(tmp_path):
+    marker = tmp_path / "ran"
+    result = subprocess.run(_iterator_of(["touch", str(marker)]), check=False)
+    assert result.returncode == 0
+    assert marker.exists()
+    pid = os.posix_spawnp("true", _iterator_of(["true"]), dict(os.environ))
+    assert os.waitpid(pid, 0)[1] == 0
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        ["ADB", "devices"],
+        ["XCRUN", "simctl", "list"],
+        ["/usr/bin/XcodeBuild", "-version"],
+        ["IDEVICE_ID", "-l"],
+        ["IOS", "list"],
+        "XCRUN simctl list",
+        "Ios.Exe list",
+    ],
+)
+def test_tool_names_ignore_the_case(command):
+    assert guard._device_tool_in(command) is not None
+    with pytest.raises(RealDeviceAccessError):
+        subprocess.run(command, shell=isinstance(command, str), check=False)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        ["ios-deploy", "--detect"],
+        ["iproxy", "8100", "8100"],
+        ["simctl", "list"],
+        ["/Applications/Xcode.app/Contents/Developer/usr/bin/simctl", "list"],
+        ["/usr/local/bin/ios-deploy", "--id", "UDID"],
+        "iproxy 8100 8100 &",
+        "/Applications/Xcode.app/Contents/Developer/usr/bin/simctl list",
+    ],
+)
+def test_ios_deploy_iproxy_and_simctl_are_blocked(command):
+    with pytest.raises(RealDeviceAccessError):
+        subprocess.run(command, shell=isinstance(command, str), check=False)

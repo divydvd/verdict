@@ -4,12 +4,24 @@ Tests marked ``requires_device`` run only with ``--run-device``. In all other
 code, the guard blocks these actions on an Android or iOS device:
 
 - Start ``adb`` or an iOS tool: ``xcode-select``, ``xcodebuild``, ``xcrun``
-  (this covers ``xcrun devicectl`` and ``xcrun simctl``), ``appium``, ``ffmpeg``,
-  every ``idevice*`` tool, ``pymobiledevice3``, ``go-ios``, and ``tidevice``. The
-  guard finds these names in every word of the command, as for ``adb``.
+  (this covers ``xcrun devicectl`` and ``xcrun simctl``), ``simctl``,
+  ``appium``, ``ffmpeg``, every ``idevice*`` tool, ``ios-deploy``, ``iproxy``,
+  ``pymobiledevice3``, ``go-ios``, and ``tidevice``. The guard finds these
+  names in every word of the command, as for ``adb``. It compares the
+  basename and ignores the case, so ``/full/path/simctl`` and ``ADB`` match.
 - Start ``ios`` (the go-ios executable). The word ``ios`` is also a normal
-  argument (``verdict run --platform ios``), so the guard blocks it only in
-  the executable position of a command.
+  argument (``verdict run --platform ios``). In an argument list, the guard
+  blocks it only in the executable position, after environment assignments
+  and wrappers such as ``env`` or ``sudo``.
+- Shell strings fail closed. A shell string is a ``str`` command (for
+  example ``shell=True`` or ``os.system``) or the script of ``sh -c``. Shell
+  syntax has too many forms (``"$(ios list)"``, ``{ ios; }``, ``! ios``), so
+  the guard does not look for the executable position in a shell string. It
+  blocks the string if a word, or a part of a word between non-name
+  characters, is ``ios``, ``ios.exe``, or a device tool name. Thus
+  ``echo ios`` in a shell string is blocked. A false block only stops a test.
+- Read an iterator command into a list before the check. The original call
+  gets the same list, so the check cannot use up the iterator.
 - Open a uiautomator2 connection or an Appium ``WebDriver`` session.
 - Open a URL on a loopback host (``localhost``, ``127.0.0.0/8``, ``::1``,
   ``0.0.0.0``) with ``urllib.request.urlopen``. The ``verdict doctor ios``
@@ -34,7 +46,7 @@ import shlex
 import subprocess
 import urllib.parse
 import urllib.request
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any
@@ -55,6 +67,9 @@ _DEVICE_TOOL_NAMES = frozenset(
         "pymobiledevice3",
         "go-ios",
         "tidevice",
+        "ios-deploy",
+        "iproxy",
+        "simctl",
     }
 )
 _DEVICE_TOOL_PREFIXES = ("idevice",)
@@ -134,6 +149,7 @@ _WRAPPERS = {
 }
 _SHELLS = frozenset({"sh", "bash", "zsh", "dash", "ksh"})
 _SHELL_SEPARATORS = re.compile(r"[;|&()<>`\s]+")
+_NON_NAME_CHARACTERS = re.compile(r"[^A-Za-z0-9._-]+")
 _SHELL_PUNCTUATION = ";&|()<>`\n"
 _SHELL_LONG_VALUES = frozenset({"rcfile", "init-file"})
 _REDIRECTIONS = frozenset({"<", ">", ">>", "<<", "<<<", "<>", ">&", "<&", "&>", ">|"})
@@ -191,18 +207,6 @@ def _command_tokens(command: Any) -> list[str]:
     if isinstance(command, (list, tuple)):
         return [token for part in command for token in _command_tokens(part)]
     return []
-
-
-def _shell_words(text: str) -> list[str]:
-    lexer = shlex.shlex(text, posix=True, punctuation_chars=_SHELL_PUNCTUATION)
-    lexer.whitespace_split = True
-    # A newline separates two commands, so it is an operator and not whitespace.
-    lexer.whitespace = " \t\r"
-    lexer.commenters = ""
-    try:
-        return list(lexer)
-    except ValueError:
-        return text.split()
 
 
 def _is_operator(word: str) -> bool:
@@ -293,10 +297,11 @@ def _shell_script(args: list[str]) -> str | None:
     return None
 
 
-def _executable_words(words: list[str]) -> Iterator[str]:
-    # Yield each word that a shell runs as a program: the first word of every
-    # command, after redirections, environment assignments, and wrappers such
-    # as env or sudo. If a wrapper option is unknown, yield all later words.
+def _executable_words(words: list[str], scripts: list[str]) -> Iterator[str]:
+    # Yield each word of an argument list that runs as a program: the first
+    # word, after environment assignments and wrappers such as env or sudo. If
+    # a wrapper option is unknown, yield all later words. Add the command
+    # string of "sh -c SCRIPT" to scripts.
     at_start = True
     index = 0
     while index < len(words):
@@ -329,34 +334,86 @@ def _executable_words(words: list[str]) -> Iterator[str]:
         if name in _SHELLS:
             script = _shell_script(words[index:])
             if script is not None:
-                yield from _executable_words(_shell_words(script))
+                scripts.append(script)
+
+
+def _argument_list(command: Any) -> list[Any] | None:
+    if isinstance(command, (str, bytes, os.PathLike, Mapping)):
+        return None
+    if isinstance(command, (list, tuple)):
+        return list(command)
+    if isinstance(command, Iterable):
+        return list(command)
+    return None
+
+
+def _argument_words(command: list[Any]) -> list[str]:
+    return [os.fsdecode(part) for part in command if isinstance(part, (str, bytes, os.PathLike))]
 
 
 def _command_executables(command: Any) -> list[str]:
-    if isinstance(command, (str, bytes, os.PathLike)):
-        return list(_executable_words(_shell_words(os.fsdecode(command))))
-    if isinstance(command, (list, tuple)):
-        words = [os.fsdecode(part) for part in command if isinstance(part, (str, bytes, os.PathLike))]
-        return list(_executable_words(words))
-    return []
+    words = _argument_list(command)
+    if words is None:
+        return []
+    return list(_executable_words(_argument_words(words), []))
 
 
 def _is_device_tool(name: str) -> bool:
+    name = name.lower()
     return name in _DEVICE_TOOL_NAMES or name.startswith(_DEVICE_TOOL_PREFIXES)
+
+
+def _shell_string_tool(text: str) -> str | None:
+    # Shell syntax has too many forms ("$(ios)", "{ ios; }", "if ...; then
+    # ios; fi", "! ios"), so the guard does not look for the executable
+    # position. It checks every word and every part of a word between
+    # non-name characters, before and after shell quote removal.
+    try:
+        words = shlex.split(text)
+    except ValueError:
+        words = []
+    for chunk in (text, *words):
+        for part in _NON_NAME_CHARACTERS.split(chunk):
+            if part.lower() in _EXECUTABLE_ONLY_NAMES or (part and _is_device_tool(part)):
+                return part
+    return None
+
+
+def _argument_list_tool(command: list[Any]) -> str | None:
+    for token in _command_tokens(command):
+        name = os.path.basename(token)
+        if _is_device_tool(name):
+            return name
+    scripts: list[str] = []
+    for word in _executable_words(_argument_words(command), scripts):
+        name = os.path.basename(word)
+        if name.lower() in _EXECUTABLE_ONLY_NAMES:
+            return name
+    for script in scripts:
+        tool = _shell_string_tool(script)
+        if tool is not None:
+            return tool
+    return None
 
 
 def _device_tool_in(*commands: Any) -> str | None:
     for command in commands:
-        for token in _command_tokens(command):
-            name = os.path.basename(token)
-            if _is_device_tool(name):
-                return name
-    for command in commands:
-        for word in _command_executables(command):
-            name = os.path.basename(word)
-            if name in _EXECUTABLE_ONLY_NAMES:
-                return name
+        if isinstance(command, (str, bytes, os.PathLike)):
+            tool = _shell_string_tool(os.fsdecode(command))
+        else:
+            words = _argument_list(command)
+            tool = None if words is None else _argument_list_tool(words)
+        if tool is not None:
+            return tool
     return None
+
+
+def _materialize(command: Any) -> Any:
+    # An iterator can be read only once. Read it into a list, then check the
+    # list and pass the same list to the original call.
+    if isinstance(command, Iterator) and not isinstance(command, (str, bytes)):
+        return list(command)
+    return command
 
 
 def _check(*commands: Any) -> None:
@@ -382,6 +439,7 @@ def _guard_execute_child(original: Any) -> Any:
     # [shell, "-c", command]). Patching it covers run, call, check_output,
     # os.popen, asyncio, and code that imported Popen before this hook ran.
     def wrapper(self: Any, args: Any, executable: Any, *rest: Any, **kwargs: Any) -> Any:
+        args = _materialize(args)
         _check(args, executable)
         return original(self, args, executable, *rest, **kwargs)
 
@@ -390,6 +448,7 @@ def _guard_execute_child(original: Any) -> Any:
 
 def _guard_function(original: Any) -> Any:
     def wrapper(*args: Any, **kwargs: Any) -> Any:
+        args = tuple(_materialize(arg) for arg in args)
         _check(*args)
         return original(*args, **kwargs)
 
