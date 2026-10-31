@@ -49,9 +49,11 @@ class FakeAppiumSession:
 
     @property
     def page_source(self) -> str:
-        source = self.page_sources.pop(0) if len(self.page_sources) > 1 else self.page_sources[0]
-        self.calls.append(("page_source",))
-        return source
+        # Like `useJSONSource=true`: this source has no `placeholderValue`.
+        raise AssertionError("the driver must read `mobile: source` with format xml")
+
+    def _xml_source(self) -> str:
+        return self.page_sources.pop(0) if len(self.page_sources) > 1 else self.page_sources[0]
 
     def add_element(self, by: str, value: str, element_id: str = "el-1") -> FakeElement:
         element = FakeElement(self.calls, element_id)
@@ -64,6 +66,8 @@ class FakeAppiumSession:
 
     def execute_script(self, script: str, *args: Any) -> Any:
         self.calls.append(("script", script, *args))
+        if script == "mobile: source" and args == ({"format": "xml"},):
+            return self._xml_source()
         return None
 
     def find_elements(self, by: str, value: str | None = None) -> list[Any]:
