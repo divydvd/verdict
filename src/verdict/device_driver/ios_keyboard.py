@@ -23,6 +23,9 @@ _KEYBOARD_VIEW_NAME = "InputSwitcherView"
 _DISMISS_REGION_NAME = "PopoverDismissRegion"
 _CELL = "XCUIElementTypeCell"
 _STATIC_TEXT = "XCUIElementTypeStaticText"
+_SETTINGS_CELL_PREFIX = "Keyboard Settings"
+"""The first cell opens the Settings app. It is not a keyboard. The label is
+the English one; on a device in another language, the cell shows in the list."""
 
 Bounds = tuple[int, int, int, int]
 
@@ -83,7 +86,7 @@ def _find_named(root: ET.Element, name: str) -> ET.Element | None:
 
 def _item(cell: ET.Element) -> KeyboardMenuItem | None:
     label = cell.get("label")
-    if not label:
+    if not label or label.startswith(_SETTINGS_CELL_PREFIX):
         return None
     texts = (element.get("value") or element.get("label") for element in cell.iter(_STATIC_TEXT))
     title = next((text for text in texts if text), label)

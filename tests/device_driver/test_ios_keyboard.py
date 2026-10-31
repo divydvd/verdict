@@ -87,7 +87,6 @@ def test_parse_keyboard_menu_reads_names_titles_and_active_cell():
     menu = parse_keyboard_menu(_menu("English (US)"))
     assert menu is not None
     assert [(item.label, item.title) for item in menu.items] == [
-        ("Keyboard Settings…", "Keyboard Settings…"),
         ("Emoji", "Emoji"),
         ("English (US)", "English (US)"),
         ("SmarType, English", "SmarType"),
@@ -95,6 +94,13 @@ def test_parse_keyboard_menu_reads_names_titles_and_active_cell():
     assert menu.active is not None and menu.active.title == "English (US)"
     # The middle of the gap above the list (0..395), in the dismiss region.
     assert menu.dismiss_point == (195, 197)
+
+
+def test_pick_does_not_select_the_keyboard_settings_cell():
+    menu = parse_keyboard_menu(_menu("Emoji"))
+    assert menu is not None
+    with pytest.raises(DriverError, match="no keyboard 'Keyboard Settings…'"):
+        menu.pick("Keyboard Settings…")
 
 
 def test_parse_keyboard_menu_is_none_when_the_list_is_closed():
@@ -155,7 +161,7 @@ def test_select_keyboard_fails_and_closes_the_list_when_the_name_is_missing(tmp_
 
     message = str(error.value)
     assert "no keyboard 'Klingon'" in message
-    assert "'Emoji', 'English (US)', 'SmarType'" in message
+    assert "The list has: 'Emoji', 'English (US)', 'SmarType'." in message
     assert "Settings > General > Keyboard > Keyboards" in message
     assert _taps(session) == [(195, 197)]
 

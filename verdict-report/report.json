@@ -1,0 +1,31 @@
+{
+  "passed": false,
+  "attempts": 1,
+  "timeline": {
+    "run_id": "200a47f3-fcbc-4534-b566-50b288a53fef",
+    "scenario_name": "ios-select-keyboard-notes",
+    "events": [
+      {
+        "timestamp": "2026-10-31T18:13:11.736125Z",
+        "step_id": "0:launch",
+        "action": "launch",
+        "passed": true,
+        "error": null,
+        "evidence_refs": [],
+        "assertion_results": []
+      },
+      {
+        "timestamp": "2026-10-31T18:13:16.908603Z",
+        "step_id": "1:tap",
+        "action": "tap",
+        "passed": false,
+        "error": "No element matching Selector(resource_id='New note', text=None, description=None, class_name=None)",
+        "evidence_refs": [],
+        "assertion_results": []
+      }
+    ]
+  },
+  "blocked": false,
+  "skipped": false,
+  "skip_reason": null
+}
