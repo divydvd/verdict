@@ -152,7 +152,18 @@ def _parse_app(raw: str) -> tuple[str, str]:
     bundle_id, path = raw.split("=", 1) if "=" in raw else ("", "")
     if not bundle_id or not path:
         raise click.BadParameter(f"expected BUNDLE_ID=PATH, got {raw!r}")
-    return bundle_id, str(Path(path).expanduser().resolve())
+    app = Path(path).expanduser().resolve()
+    # clear_data uninstalls the app before it installs this file again, so a bad path
+    # must stop the run before the driver is made.
+    if not app.exists():
+        raise click.BadParameter(f"{app} does not exist", param_hint="--app")
+    is_app = app.is_dir() and app.suffix == ".app"
+    is_ipa = app.is_file() and app.suffix == ".ipa"
+    if not (is_app or is_ipa):
+        raise click.BadParameter(
+            f"{app} must be an .app folder or an .ipa file", param_hint="--app"
+        )
+    return bundle_id, str(app)
 
 
 def _parse_capability(raw: str) -> tuple[str, Any]:

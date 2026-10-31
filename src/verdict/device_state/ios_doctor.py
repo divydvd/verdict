@@ -31,7 +31,7 @@ _XCODE_SELECT_FIX = (
 _DEVELOPER_MODE_FIX = (
     "On the iPhone, turn on Settings > Privacy & Security > Developer Mode, then restart it"
 )
-_WDA_SIGNING_KEYS = ("xcodeOrgId", "xcodeConfigFile", "updatedWDABundleId", "usePreinstalledWDA")
+_WDA_SIGNING_KEYS = ("xcodeOrgId", "xcodeConfigFile", "usePreinstalledWDA")
 _DEVICE_FIX = (
     "Connect the iPhone with a cable and trust this Mac, "
     "or boot a Simulator: xcrun simctl boot <UDID>"
@@ -366,11 +366,20 @@ def check_wda_signing(
     given = [key for key in _WDA_SIGNING_KEYS if _given(capabilities, key)]
     if given:
         return Check("wda signing", CheckStatus.OK, f"given: appium:{', appium:'.join(given)}")
+    if _given(capabilities, "updatedWDABundleId"):
+        # A new bundle id only renames WDA. It does not give a team or an identity.
+        return Check(
+            "wda signing",
+            CheckStatus.WARN,
+            "only appium:updatedWDABundleId is given; it does not sign WDA. It needs a "
+            "provisioning profile for that bundle id, or a team id",
+            "Also give your Apple team id: --capability appium:xcodeOrgId=TEAMID, "
+            "or give appium:xcodeConfigFile",
+        )
     return Check(
         "wda signing",
         CheckStatus.WARN,
-        "no appium:xcodeOrgId, appium:xcodeConfigFile, appium:updatedWDABundleId, "
-        "or appium:usePreinstalledWDA is given",
+        "no appium:xcodeOrgId, appium:xcodeConfigFile, or appium:usePreinstalledWDA is given",
         "Give your Apple team id: --capability appium:xcodeOrgId=TEAMID "
         '--capability "appium:xcodeSigningId=Apple Development"',
     )

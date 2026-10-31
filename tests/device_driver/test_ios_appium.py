@@ -451,3 +451,34 @@ def test_other_webdriver_errors_pass_through_as_blocked(tmp_path):
     with pytest.raises(IOS_CONNECTION_ERRORS) as info:
         driver.type_text("a")
     assert not isinstance(info.value, DriverError)
+
+
+def _script_returning(session, result):
+    real_script = session.execute_script
+
+    def script(name, *args):
+        real_script(name, *args)
+        return result
+
+    session.execute_script = script
+
+
+def test_uninstall_raises_when_remove_app_returns_false(tmp_path):
+    driver, session = make_driver(tmp_path)
+    _script_returning(session, False)
+    with pytest.raises(DriverError, match="could not remove"):
+        driver.uninstall("com.example.smartype")
+
+
+def test_uninstall_accepts_true(tmp_path):
+    driver, session = make_driver(tmp_path)
+    _script_returning(session, True)
+    driver.uninstall("com.example.smartype")
+
+
+def test_clear_data_stops_before_install_when_removal_fails(tmp_path):
+    driver, session = make_driver(tmp_path, app_paths={"com.example.smartype": "/apps/SmarType.app"})
+    _script_returning(session, False)
+    with pytest.raises(DriverError):
+        driver.clear_data("com.example.smartype")
+    assert [call[1] for call in session.calls if call[0] == "script"] == ["mobile: removeApp"]

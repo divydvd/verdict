@@ -76,6 +76,9 @@ def test_android_is_the_default_platform(tmp_path, monkeypatch):
 def test_platform_ios_selects_the_ios_driver_and_closes_it(tmp_path, ios_calls):
     calls, driver = ios_calls
     app = tmp_path / "SmarType.app"
+    app.mkdir()
+    ipa = tmp_path / "Other.ipa"
+    ipa.write_bytes(b"ipa")
 
     result = CliRunner().invoke(
         cli.main,
@@ -91,7 +94,7 @@ def test_platform_ios_selects_the_ios_driver_and_closes_it(tmp_path, ios_calls):
             "--app",
             f"bha.keys.smartype={app}",
             "--app",
-            "com.example.other=/apps/Other.ipa",
+            f"com.example.other={ipa}",
             "-o",
             str(tmp_path / "out"),
         ],
@@ -106,7 +109,7 @@ def test_platform_ios_selects_the_ios_driver_and_closes_it(tmp_path, ios_calls):
             "capabilities": {},
             "app_paths": {
                 "bha.keys.smartype": str(app.resolve()),
-                "com.example.other": str(Path("/apps/Other.ipa").resolve()),
+                "com.example.other": str(ipa.resolve()),
             },
         }
     ]
@@ -641,7 +644,6 @@ def test_doctor_warns_when_no_wda_signing_capability_is_given(monkeypatch):
 @pytest.mark.parametrize(
     "content",
     [
-        '{"appium:updatedWDABundleId": "com.divy.wda"}',
         '{"usePreinstalledWDA": true}',
         '{"appium:xcodeConfigFile": "/signing/wda.xcconfig"}',
         '{"xcodeConfigFile": "/signing/wda.xcconfig"}',
@@ -742,3 +744,58 @@ def test_doctor_reports_a_failed_ffmpeg_with_its_error(monkeypatch, outcome, exp
     assert result.exit_code == 0, result.output
     assert expected in result.output
     assert "fix: Repair the ffmpeg install" in result.output
+
+
+@pytest.mark.parametrize(
+    ("name", "kind", "message"),
+    [
+        ("Missing.app", None, "does not exist"),
+        ("SmarType.ipa", "folder", "must be an .app folder or an .ipa file"),
+        ("SmarType.app", "file", "must be an .app folder or an .ipa file"),
+        ("SmarType.zip", "file", "must be an .app folder or an .ipa file"),
+    ],
+)
+def test_bad_app_path_is_a_usage_error_before_the_driver_is_made(
+    tmp_path, ios_calls, name, kind, message
+):
+    app = tmp_path / name
+    if kind == "folder":
+        app.mkdir()
+    elif kind == "file":
+        app.write_text("x")
+    result = CliRunner().invoke(
+        cli.main,
+        ["run", str(_scenario(tmp_path)), "--platform", "ios", "--app", f"bha.keys.smartype={app}"],
+    )
+    assert result.exit_code == 2, result.output
+    assert message in result.output
+    assert ios_calls[0] == []
+
+
+def test_doctor_warns_when_only_updated_wda_bundle_id_is_given(monkeypatch):
+    result = _invoke_doctor(
+        monkeypatch,
+        _devicectl_runner(_IPHONE),
+        args=["--capability", "appium:updatedWDABundleId=com.divy.wda"],
+    )
+    assert result.exit_code == 0, result.output
+    assert "WARN wda signing: only appium:updatedWDABundleId is given; it does not sign WDA" in (
+        result.output
+    )
+    assert "provisioning profile" in result.output
+    assert "--capability appium:xcodeOrgId=TEAMID" in result.output
+
+
+def test_doctor_accepts_updated_wda_bundle_id_with_a_team_id(monkeypatch):
+    result = _invoke_doctor(
+        monkeypatch,
+        _devicectl_runner(_IPHONE),
+        args=[
+            "--capability",
+            "appium:updatedWDABundleId=com.divy.wda",
+            "--capability",
+            "appium:xcodeOrgId=ABCDE12345",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "OK   wda signing: given: appium:xcodeOrgId" in result.output
