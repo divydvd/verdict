@@ -397,6 +397,24 @@ class DeviceDriver(InputDriver, AppLifecycleDriver, DiagnosticsDriver, Protocol)
   when the state differs, then reads the state again with the `settle_ms` re-checks. After the
   tap, a missing node is read again in the same re-checks, because the screen can redraw. The
   step fails when the state does not change, or when no matched node or ancestor is checkable.
+- Per-platform selectors (ADR-0009). Element ids can be different on Android and iOS. A step can
+  give one selector for each platform:
+
+  ```yaml
+  - action: tap
+    selector:
+      android: { resource_id: "com.app:id/send" }
+      ios: { resource_id: "sendButton" }
+  ```
+
+  The plain form (`selector: { resource_id: "send" }`) applies to all platforms. Before a step
+  runs, the runner selects the selector for `driver.platform`. When the step has no selector for
+  that platform, the step fails with a clear error. A per-platform selector cannot also have
+  plain selector keys.
+- Supported platforms. The optional scenario field `platforms: [android, ios]` lists the
+  platforms that the scenario supports. When you do not give it, the scenario supports all
+  platforms. When the device platform is not in the list, the runner runs no step. The result
+  is `SKIPPED`, and the report shows the skip reason.
 
 ### 6.3 Assertion Library (`assertions/`) + `domains/ime/`
 

@@ -35,10 +35,10 @@ class MarkdownRenderer:
             f"**Result:** {result.status}",
             f"**Attempts:** {result.attempts}",
             f"**Run ID:** {timeline.run_id}",
-            "",
-            "## Steps",
-            "",
         ]
+        if result.skip_reason:
+            lines.append(f"**Skip reason:** {result.skip_reason}")
+        lines += ["", "## Steps", ""]
         for event in timeline.events:
             lines.extend(_render_event(event))
         return "\n".join(lines)

@@ -41,5 +41,7 @@
       }
     ]
   },
-  "blocked": false
+  "blocked": false,
+  "skipped": false,
+  "skip_reason": null
 }
