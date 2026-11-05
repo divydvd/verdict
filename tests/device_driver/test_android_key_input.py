@@ -89,11 +89,24 @@ def test_press_key_rejects_invalid_key_before_adb(driver):
     assert driver._adb.commands == []
 
 
-def test_driver_start_stops_a_stale_server_and_starts_its_own(monkeypatch, tmp_path):
-    # verdict#10: a server from an earlier run dies when adbd flushes to the
-    # closed stream of that run. The driver must not reuse it.
+def test_driver_start_uses_the_supported_server_lifecycle_without_shell_kills(monkeypatch, tmp_path):
     device = _FakeU2Device()
     monkeypatch.setattr(android_module.u2, "connect", lambda *args: device)
     AndroidUiautomator2Driver(evidence_dir=tmp_path)
-    assert device.adb_device.commands == ["pkill -f 'com.wetest.uia2.Mai[n]'"]
+    assert device.adb_device.commands == []
     assert device.server_calls == ["stop wait=True", "start"]
+
+
+@pytest.mark.parametrize("operation", ["stop_uiautomator", "start_uiautomator"])
+def test_driver_start_reports_server_lifecycle_failure(monkeypatch, tmp_path, operation):
+    device = _FakeU2Device()
+    monkeypatch.setattr(android_module.u2, "connect", lambda *args: device)
+
+    def fail(*args, **kwargs):
+        raise ConnectionError("server connection lost")
+
+    monkeypatch.setattr(device, operation, fail)
+    with pytest.raises(ConnectionError, match="server connection lost"):
+        AndroidUiautomator2Driver(evidence_dir=tmp_path)
+    assert device.adb_device.commands == []
+    assert device.server_calls == ([] if operation == "stop_uiautomator" else ["stop wait=True"])

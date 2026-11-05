@@ -2,15 +2,18 @@ import pytest
 
 from tests.device_state.fake_adb import GBOARD, PLAY, TARGET, TARGET_IME, FakePhone
 from verdict.core.exceptions import VerdictError
+from verdict.device_state.adb import AdbError
 from verdict.device_state.baseline import (
     APP_DATA_TAR,
     PRETEST_APK,
+    BlockedError,
     prepare_private_folder,
     take_baseline,
 )
 from verdict.device_state.restore import (
     FINAL_APK,
     delete_backups,
+    extract_backup,
     ime_ids,
     load_baseline,
     restore,
@@ -173,7 +176,8 @@ def test_backup_goes_through_a_private_staging_folder_that_is_deleted(folder):
         f"push app-data.tar {remote}",
         f"chmod 600 {remote}",
         f"run-as {TARGET} tar -xf - < {remote}",
-        f"rm -rf -- {staging}",
+        f"rm -f -- {remote}",
+        f"rmdir -- {staging}",
     ]
     assert [phone.commands.index(c) for c in order] == sorted(phone.commands.index(c) for c in order)
     assert phone.staging == {} and phone.remote_files == {}
@@ -183,9 +187,52 @@ def test_backup_goes_through_a_private_staging_folder_that_is_deleted(folder):
 def test_staging_folder_is_deleted_when_the_extract_fails(folder):
     phone, baseline = baseline_then_test(folder, code=100)
     phone.fail_on = {"tar -xf"}
-    with pytest.raises(Exception, match="scripted failure"):
+    with pytest.raises(AdbError, match="scripted failure"):
         restore(phone, baseline, folder, "FAIL")
     assert phone.staging == {} and phone.remote_files == {}
+
+
+def test_cleanup_keeps_unexpected_staging_content(folder, monkeypatch):
+    phone = FakePhone()
+    take_baseline(phone, TARGET, PLAY, folder)
+    original_push = phone.push
+
+    def push_with_another_file(local, remote):
+        original_push(local, remote)
+        phone.remote_files[remote + ".other"] = b"keep"
+
+    monkeypatch.setattr(phone, "push", push_with_another_file)
+    with pytest.raises(AdbError, match="directory not empty"):
+        extract_backup(phone, TARGET, folder / APP_DATA_TAR)
+    staging = next(iter(phone.staging))
+    assert phone.remote_files == {f"{staging}/app-data.tar.other": b"keep"}
+    assert (folder / APP_DATA_TAR).exists()
+    assert (folder / PRETEST_APK).exists()
+
+
+def test_cleanup_removes_a_partial_upload_after_push_failure(folder, monkeypatch):
+    phone = FakePhone()
+    take_baseline(phone, TARGET, PLAY, folder)
+
+    def broken_push(local, remote):
+        phone.remote_files[remote] = b"partial"
+        raise AdbError("upload interrupted")
+
+    monkeypatch.setattr(phone, "push", broken_push)
+    with pytest.raises(AdbError, match="upload interrupted"):
+        extract_backup(phone, TARGET, folder / APP_DATA_TAR)
+    assert phone.remote_files == {} and phone.staging == {}
+    assert not any(command.startswith("rm -rf") for command in phone.commands)
+
+
+def test_cleanup_failure_is_reported_without_deleting_the_staging_folder(folder):
+    phone = FakePhone()
+    take_baseline(phone, TARGET, PLAY, folder)
+    phone.fail_on = {"rm -f"}
+    with pytest.raises(AdbError, match="scripted failure"):
+        extract_backup(phone, TARGET, folder / APP_DATA_TAR)
+    assert len(phone.staging) == len(phone.remote_files) == 1
+    assert (folder / APP_DATA_TAR).exists()
 
 
 def test_keyboard_start_after_the_check_point_gives_no_false_difference(folder):
@@ -262,14 +309,32 @@ def test_fail_skips_the_install_when_the_pretest_apk_is_still_installed(folder):
     assert not (folder / FINAL_APK).exists()
 
 
-def test_fail_installs_when_a_split_apk_build_blocks_the_sha_probe(folder):
+def test_fail_stops_when_a_split_apk_build_blocks_the_sha_probe(folder):
     phone, baseline = baseline_then_test(folder, code=100)
     phone.apk_paths = ["/data/app/~~x/base.apk", "/data/app/~~x/split_config.arm64.apk"]
 
-    report = restore(phone, baseline, folder, "FAIL")
+    with pytest.raises(BlockedError, match="only a single APK is supported"):
+        restore(phone, baseline, folder, "FAIL")
 
-    assert "install -r pretest.apk" in phone.commands
-    assert report.equal, report.rows
-    assert phone.system["font_scale"] == "1.0"
-    assert "pretest APK install" not in rows(report)
+    assert not any(c.startswith("install") or "tar -xf" in c for c in phone.commands)
+    assert phone.system["font_scale"] == "1.5"
+    assert (folder / PRETEST_APK).exists() and (folder / APP_DATA_TAR).exists()
+    assert not (folder / FINAL_APK).exists()
+
+
+@pytest.mark.parametrize("error_type", [AdbError, OSError])
+def test_fail_stops_when_the_installed_apk_cannot_be_read(folder, monkeypatch, error_type):
+    phone, baseline = baseline_then_test(folder, code=100)
+
+    def broken_pull(remote, local):
+        local.write_bytes(b"partial")
+        raise error_type("APK read interrupted")
+
+    monkeypatch.setattr(phone, "pull", broken_pull)
+    with pytest.raises(error_type, match="APK read interrupted"):
+        restore(phone, baseline, folder, "FAIL")
+    assert not any(c.startswith("install") or "tar -xf" in c for c in phone.commands)
+    assert phone.apk_bytes == b"candidate-apk"
+    assert phone.system["font_scale"] == "1.5"
+    assert (folder / PRETEST_APK).exists() and (folder / APP_DATA_TAR).exists()
     assert not (folder / FINAL_APK).exists()
