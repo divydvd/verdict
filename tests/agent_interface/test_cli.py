@@ -228,6 +228,34 @@ def test_restore_command_blocks_when_adb_fails(tmp_path, monkeypatch):
     assert "BLOCKED: the restore stopped" in result.output
 
 
+def test_restore_command_reports_apk_probe_failure_and_keeps_backups(tmp_path, monkeypatch):
+    from verdict.device_state.adb import AdbError
+
+    phone, folder = _baseline_and_test(tmp_path)
+    original_pull = phone.pull
+    pulls = 0
+
+    def interrupted_pull(remote, local):
+        nonlocal pulls
+        pulls += 1
+        if pulls == 1:
+            local.write_bytes(b"partial")
+            raise AdbError("APK read interrupted")
+        original_pull(remote, local)
+
+    monkeypatch.setattr(phone, "pull", interrupted_pull)
+    monkeypatch.setattr(cli, "SubprocessAdb", lambda serial: phone)
+    result = CliRunner().invoke(
+        cli.main, ["restore", "bha.keys.smartype.debug", "--dir", str(folder), "--result", "FAIL"]
+    )
+    assert result.exit_code == 2, result.output
+    assert "BLOCKED: the restore stopped" in result.output
+    assert "APK read interrupted" in result.output
+    assert not any(c.startswith("install") or "tar -xf" in c for c in phone.commands)
+    assert (folder / "app-data.tar").exists() and (folder / "pretest.apk").exists()
+    assert not (folder / "final-check.apk").exists()
+
+
 def test_restore_command_blocks_when_adb_fails_in_the_preflight(tmp_path, monkeypatch):
     from verdict.device_state.adb import AdbError
 

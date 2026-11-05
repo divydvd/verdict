@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Literal
 
 from verdict.core.exceptions import VerdictError
-from verdict.device_state.adb import Adb, AdbError
+from verdict.device_state.adb import Adb
 from verdict.device_state.baseline import (
     APP_DATA_SHA256,
     APP_DATA_TAR,
@@ -26,7 +26,6 @@ from verdict.device_state.baseline import (
     NIGHT_MODE,
     PRETEST_APK,
     Baseline,
-    BlockedError,
     DeviceState,
     PackageVersion,
     in_family,
@@ -95,7 +94,7 @@ def _safe_data_path(path: str) -> str:
 def extract_backup(adb: Adb, package: str, tar: Path) -> None:
     """Push the tar to a new mode-700 staging folder that only the shell user can
     read, and extract it with a redirect on the phone. A stdin pipe through adb
-    fails on some phones. The staging folder is always deleted."""
+    fails on some phones. Remove only the archive, then the empty staging folder."""
     staging = f"{STAGING_ROOT}/verdict-restore-{secrets.token_hex(8)}"
     remote = f"{staging}/{APP_DATA_TAR}"
     adb.shell(f"mkdir -m 700 {staging}")
@@ -104,7 +103,8 @@ def extract_backup(adb: Adb, package: str, tar: Path) -> None:
         adb.shell(f"chmod 600 {remote}")
         adb.shell(f"run-as {shlex.quote(package)} tar -xf - < {remote}")
     finally:
-        adb.shell(f"rm -rf -- {staging}")
+        adb.shell(f"rm -f -- {remote}")
+        adb.shell(f"rmdir -- {staging}")
 
 
 def restore_app_data(adb: Adb, baseline: Baseline, folder: Path) -> int:
@@ -175,8 +175,6 @@ def _installed_apk_is_pretest(adb: Adb, baseline: Baseline, folder: Path) -> boo
         return False
     try:
         return pull_apk(adb, baseline.package, folder / FINAL_APK) == baseline.state.apk_sha256
-    except (AdbError, BlockedError, OSError):
-        return False  # for example a split-APK build: not confirmed equal, so install
     finally:
         (folder / FINAL_APK).unlink(missing_ok=True)
 

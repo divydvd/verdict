@@ -38,9 +38,6 @@ _SELECTOR_FIELD_MAP = {
 }
 
 
-# The uiautomator2 server process on the phone (see uiautomator2.core).
-U2_SERVER_CLASS = "com.wetest.uia2.Main"
-
 # Errors that mean the device connection or the uiautomator2 server failed.
 # They are not test results, so the CLI reports BLOCKED for them.
 CONNECTION_ERRORS: tuple[type[BaseException], ...] = (
@@ -101,12 +98,8 @@ class AndroidUiautomator2Driver:
         self._restart_server()
 
     def _restart_server(self) -> None:
-        # A server that an earlier Verdict process started writes to an adb
-        # shell stream that this process does not hold. adbd closes that
-        # stream on the next flush, and the server dies (verdict#10). Stop it
-        # and start a new server that this process owns.
-        # The "[n]" stops the pattern from matching this shell command itself.
-        self._adb.shell(f"pkill -f '{U2_SERVER_CLASS[:-1]}[{U2_SERVER_CLASS[-1]}]'")
+        # Let uiautomator2 stop its owned process connection. A name-based
+        # kill can also stop a server owned by another runner.
         self._device.stop_uiautomator(wait=True)
         self._device.start_uiautomator()
 

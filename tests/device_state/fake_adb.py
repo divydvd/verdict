@@ -131,6 +131,14 @@ class FakePhone:
                 k: v for k, v in self.remote_files.items() if not k.startswith(words[3] + "/")
             }
             return ""
+        if words[:3] == ["rm", "-f", "--"]:
+            self.remote_files.pop(words[3], None)
+            return ""
+        if words[:2] == ["rmdir", "--"]:
+            if any(path.startswith(words[2] + "/") for path in self.remote_files):
+                raise AdbError(f"directory not empty: {words[2]}")
+            del self.staging[words[2]]
+            return ""
         if words[:2] == ["am", "force-stop"]:
             return ""
         if words[:2] == ["settings", "put"]:
