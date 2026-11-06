@@ -207,6 +207,20 @@ class AndroidUiautomator2Driver:
     def wait_for(self, selector: Selector, timeout_ms: int) -> bool:
         return bool(self._ui_object(selector).wait(timeout=timeout_ms / 1000))
 
+    def get_text(self, selector: Selector) -> str | None:
+        # Android hierarchy XML can replace supplementary Unicode with dots.
+        try:
+            text = self._ui_object(selector).get_text(timeout=0)
+        except CONNECTION_ERRORS:
+            raise
+        except u2.exceptions.UiObjectNotFoundError:
+            return None
+        except u2.exceptions.RPCError as exc:
+            raise DriverError(f"text read for {selector!r} failed: {exc}") from exc
+        if not isinstance(text, str):
+            raise DriverError(f"text read for {selector!r} returned {type(text).__name__}, not str")
+        return text
+
     # -- KeyboardDriver ----------------------------------------------------
 
     def select_keyboard(self, name: str) -> None:

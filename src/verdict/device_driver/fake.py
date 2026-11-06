@@ -108,6 +108,10 @@ class FakeDeviceDriver:
     def wait_for(self, selector: Selector, timeout_ms: int) -> bool:
         return self.dump_hierarchy().find(selector) is not None
 
+    def get_text(self, selector: Selector) -> str | None:
+        node = self.dump_hierarchy().find(selector)
+        return node.text if node is not None else None
+
     def install(self, path: str) -> None:
         self.installed_packages.add(path)
 

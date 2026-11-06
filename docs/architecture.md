@@ -209,7 +209,7 @@ was insufficient, what problem the proposal solves, the tradeoffs, and phase pla
   `uninstall`, `clear_data`) and Android-specific diagnostics (`collect_logcat`). A Web driver has
   no "APK to install" — there's no clean way to implement that interface without fake/no-op methods.
 - **Problem solved:** decompose into `InputDriver` (tap/swipe/scroll/type/press_key/screenshot/
-  dump_hierarchy/wait_for — truly universal across mobile/desktop/web, though selector semantics
+  dump_hierarchy/get_text/wait_for — truly universal across mobile/desktop/web, though selector semantics
   differ), `AppLifecycleDriver` (install/uninstall/launch/clear_data — mobile-app-specific; a Web
   driver would instead implement a `WebLifecycleDriver` with `navigate(url)`/`clear_cookies()`),
   and `DiagnosticsDriver` (logs/recording/bugreport — semantics adapt per platform, e.g. logcat vs.
@@ -344,6 +344,7 @@ class InputDriver(Protocol):
     def press_key(self, key: KeyEvent | int | str) -> None: ...  # BACK, HOME, ... or any key code
     def screenshot(self) -> Path: ...
     def dump_hierarchy(self) -> UiHierarchy: ...
+    def get_text(self, selector: Selector) -> str | None: ...
     def wait_for(self, selector: Selector, timeout_ms: int) -> bool: ...
 
 class AppLifecycleDriver(Protocol):

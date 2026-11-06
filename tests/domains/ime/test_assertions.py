@@ -1,5 +1,7 @@
+import pytest
+
 from verdict.assertions.base import assertion_registry
-from verdict.core.models import RunContext, UiNode
+from verdict.core.models import RunContext, Selector, UiNode
 from verdict.device_driver.fake import FakeDeviceDriver
 from verdict.domains.ime.assertions import (
     AiSuggestionVisibleAssertion,
@@ -58,6 +60,35 @@ def test_text_inserted_matches_substring():
     driver.set_hierarchy(UiNode(resource_id="text_field", text="hello world"))
     assert TextInsertedAssertion("world").check(_ctx(driver)).passed is True
     assert TextInsertedAssertion("bye").check(_ctx(driver)).passed is False
+
+
+@pytest.mark.parametrize(
+    "actual, expected",
+    [
+        ("keep \U0001f382 ", "\U0001f382"),
+        ("a\u0301 \U0001f469\u200d\U0001f4bb ", "\U0001f469\u200d\U0001f4bb"),
+    ],
+)
+def test_fake_field_text_preserves_unicode(actual, expected):
+    driver = FakeDeviceDriver()
+    driver.set_hierarchy(UiNode(resource_id="text_field", text=actual))
+    assert driver.get_text(Selector(resource_id="text_field")) == actual
+    result = TextInsertedAssertion(expected).check(_ctx(driver))
+    assert result.passed
+    assert repr(actual) in result.message
+
+
+@pytest.mark.parametrize("actual", [None, ""])
+def test_fake_field_without_text_does_not_claim_insertion(actual):
+    driver = FakeDeviceDriver()
+    driver.set_hierarchy(UiNode(resource_id="text_field", text=actual))
+    assert not TextInsertedAssertion("\U0001f382").check(_ctx(driver)).passed
+
+
+def test_missing_fake_field_fails_even_for_empty_expected_text():
+    driver = FakeDeviceDriver()
+    assert driver.get_text(Selector(resource_id="text_field")) is None
+    assert not TextInsertedAssertion("").check(_ctx(driver)).passed
 
 
 def test_clipboard_updated():

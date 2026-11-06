@@ -57,6 +57,15 @@ class InputDriver(Protocol):
 
     def dump_hierarchy(self) -> UiHierarchy: ...
 
+    def get_text(self, selector: Selector) -> str | None:
+        """Read element text without Unicode normalization or trimming.
+
+        Return None for a missing element or an element without text.
+        An empty text is "". Read errors must propagate, not return defaults.
+        Android must use the native text API, not its lossy hierarchy XML.
+        """
+        ...
+
     def wait_for(self, selector: Selector, timeout_ms: int) -> bool: ...
 
 

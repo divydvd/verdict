@@ -38,3 +38,13 @@ in the table below.
 iOS has no command to select a keyboard. The `select_keyboard` step uses the globe key. It finds
 the system globe key (`Next keyboard`) first. If the keyboard draws its own globe key, set
 `accessibilityIdentifier = "next_keyboard_key"` on that key. See ADR-0010.
+
+## Field text verification
+`text_inserted` and `autocorrect_applied` read `TEXT_FIELD` through `driver.get_text`.
+Android reads the native field text. Its hierarchy XML can replace emoji with dots.
+iOS retains its XML value and placeholder rules. The fake driver reads its configured node text.
+`text_inserted` still checks substring membership. It does not require exact equality.
+Missing fields fail. Read errors remain errors; Verdict does not substitute hierarchy text after an Android read failure.
+The assertion message includes the actual field text.
+Hierarchy files remain unchanged evidence. A correct native text read does not change an older failed report.
+See [Field text verification](flows/field-text-verification.md) for the sequence and tests.
