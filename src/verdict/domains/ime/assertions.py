@@ -52,8 +52,7 @@ class TextInsertedAssertion:
         self.text = text
 
     def check(self, ctx: RunContext) -> AssertionResult:
-        node = ctx.driver.dump_hierarchy().find(TEXT_FIELD)
-        actual = node.text if node is not None else None
+        actual = ctx.driver.get_text(TEXT_FIELD)
         passed = actual is not None and self.text in actual
         return AssertionResult(
             passed=passed, message=f"text field contains {self.text!r} (actual: {actual!r})"
@@ -84,8 +83,7 @@ class AutocorrectAppliedAssertion:
         self.original = original
 
     def check(self, ctx: RunContext) -> AssertionResult:
-        node = ctx.driver.dump_hierarchy().find(TEXT_FIELD)
-        actual = node.text if node is not None else None
+        actual = ctx.driver.get_text(TEXT_FIELD)
         if actual is None:
             return AssertionResult(passed=False, message="text field not found")
         applied = self.corrected in actual

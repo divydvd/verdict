@@ -387,6 +387,11 @@ class IosAppiumDriver:
     def wait_for(self, selector: Selector, timeout_ms: int) -> bool:
         return self._find_with_wait(selector, timeout_ms) is not None
 
+    def get_text(self, selector: Selector) -> str | None:
+        # The iOS XML source preserves Unicode and distinguishes placeholders.
+        node = self.dump_hierarchy().find(selector)
+        return node.text if node is not None else None
+
     # -- KeyboardDriver ----------------------------------------------------
 
     def select_keyboard(self, name: str) -> None:

@@ -14,7 +14,7 @@ interface would force irrelevant methods on future implementations.
 
 ## Decision
 Split the driver interface into three composable protocols:
-- `InputDriver` — tap, swipe, scroll, type_text, press_key, screenshot, dump_hierarchy, wait_for.
+- `InputDriver` — tap, swipe, scroll, type_text, press_key, screenshot, dump_hierarchy, get_text, wait_for.
   Genuinely universal across mobile, desktop, and web, even though selector semantics differ per
   platform.
 - `AppLifecycleDriver` — install, uninstall, launch, clear_data. Mobile-app-specific; a Web driver
@@ -25,6 +25,14 @@ Split the driver interface into three composable protocols:
 
 `DeviceDriver = InputDriver & AppLifecycleDriver & DiagnosticsDriver` for the mobile case.
 `AndroidUiautomator2Driver` implements the full composition.
+
+### Text reads
+`get_text(selector)` reads element text without Unicode normalization or trimming.
+It returns `None` for a missing element or an element without text.
+It returns `""` for an empty text. Read errors propagate.
+Android uses the native `getText` API because hierarchy XML can replace Unicode text with dots.
+iOS uses its existing XML text parser, which preserves Unicode and excludes placeholders from empty fields.
+External `InputDriver` implementations must provide this method.
 
 ## Consequences
 **Positive:**
